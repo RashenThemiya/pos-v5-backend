@@ -11,4 +11,7 @@ public interface StockBatchRepository extends JpaRepository<StockBatch, Long> {
     List<StockBatch> findByBranchIdAndItemId(Long branchId, Long itemId);
     Optional<StockBatch> findByInternalBatchBarcode(String internalBatchBarcode);
     boolean existsByInternalBatchBarcode(String internalBatchBarcode);
+        Optional<StockBatch> findByBranchIdAndInternalBatchBarcode(Long branchId, String internalBatchBarcode);
+List<StockBatch> findByBranchIdOrderByCreatedAtDesc(Long branchId);
+List<StockBatch> findByBranchIdAndItemIdOrderByCreatedAtDesc(Long branchId, Long itemId);
 }

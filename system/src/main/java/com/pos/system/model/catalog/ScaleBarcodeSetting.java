@@ -11,8 +11,11 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "scale_barcode_settings")
+@Table(name = "scale_barcode_settings", uniqueConstraints = {
+        @UniqueConstraint(columnNames = {"branch_id", "prefix"})
+})
 public class ScaleBarcodeSetting {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long settingId;
@@ -23,19 +26,27 @@ public class ScaleBarcodeSetting {
     @Column(nullable = false, length = 10)
     private String prefix;
 
-    private Integer itemCodeStart;
-    private Integer itemCodeLength;
+    @Column(nullable = false)
+    private Integer totalLength;
 
     @Column(nullable = false)
-    private String valueType; // WEIGHT or PRICE
+    private Integer itemCodeStart;
 
+    @Column(nullable = false)
+    private Integer itemCodeLength;
+
+    // WEIGHT or PRICE
+    @Column(nullable = false, length = 20)
+    private String valueType;
+
+    @Column(nullable = false)
     private Integer valueStart;
-    private Integer valueLength;
-    private Integer valueDecimalPlaces;
 
-    private Integer priceStart;
-    private Integer priceLength;
-    private Integer priceDecimalPlaces;
+    @Column(nullable = false)
+    private Integer valueLength;
+
+    @Column(nullable = false)
+    private Integer valueDecimalPlaces;
 
     private Boolean isActive = true;
     private LocalDateTime createdAt;

@@ -13,9 +13,11 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Entity
 @Table(name = "item_units", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"item_id", "unit_name"})
+        @UniqueConstraint(columnNames = {"item_id", "unit_name"}),
+        @UniqueConstraint(columnNames = {"branch_id", "barcode"})
 })
 public class ItemUnit {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long unitId;
@@ -29,16 +31,26 @@ public class ItemUnit {
     @Column(nullable = false, length = 30)
     private String unitName;
 
+    // Example:
+    // KG = 1
+    // 100G = 0.1
+    // 50KG_BAG = 50
     @Column(nullable = false, precision = 12, scale = 4)
     private BigDecimal multiplierToBase;
 
+    // manufacturer barcode or internally generated barcode
+    @Column(length = 100)
     private String barcode;
 
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal defaultSellingPrice;
 
+    @Column(nullable = false)
     private Boolean isBaseUnit = false;
+
+    @Column(nullable = false)
     private Boolean isActive = true;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

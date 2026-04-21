@@ -1,17 +1,19 @@
 package com.pos.system.dto.stock;
 
+import lombok.Builder;
 import lombok.Data;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
-public class StockMovementResponse {
+@Builder
+public class StockMovementResponseDto {
     private Long movementId;
     private Long branchId;
-    private Long itemId;
-    private String itemName;
     private String movementType;
+    private Long itemId;
+    private Long unitId;
     private String internalBatchBarcode;
     private BigDecimal quantity;
     private BigDecimal unitCost;

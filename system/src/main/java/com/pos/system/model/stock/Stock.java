@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
         @UniqueConstraint(columnNames = {"branch_id", "item_id"})
 })
 public class Stock {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long stockId;
@@ -26,8 +27,15 @@ public class Stock {
     @Column(nullable = false)
     private Long itemId;
 
+    // always stored in base unit
+    @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal availableQty = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal damagedQty = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal expiredQty = BigDecimal.ZERO;
+
     private LocalDateTime lastUpdated;
 }

@@ -10,4 +10,6 @@ public interface StockRepository extends JpaRepository<Stock, Long> {
     List<Stock> findByBranchId(Long branchId);
     Optional<Stock> findByBranchIdAndItemId(Long branchId, Long itemId);
     boolean existsByBranchIdAndItemId(Long branchId, Long itemId);
+    List<Stock> findByBranchIdOrderByLastUpdatedDesc(Long branchId);
+
 }

@@ -15,6 +15,7 @@ import java.time.LocalDateTime;
         @UniqueConstraint(columnNames = {"branch_id", "sku"})
 })
 public class Item {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long itemId;
@@ -31,9 +32,16 @@ public class Item {
     private String image;
     private Long categoryId;
     private Long brandId;
+
+    @Column(nullable = false)
     private Boolean isWeighed = false;
+
+    // optional: only for items sold through scale barcode flow
     private String scaleBarcodePrefix;
+
+    @Column(nullable = false)
     private Boolean isActive = true;
+
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 }

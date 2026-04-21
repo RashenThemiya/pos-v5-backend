@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "stock_movements")
 public class StockMovement {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long movementId;
@@ -21,12 +22,26 @@ public class StockMovement {
     @Column(nullable = false)
     private Long branchId;
 
+    @Column(nullable = false, length = 30)
     private String movementType;
+
+    @Column(nullable = false)
     private Long itemId;
+
+    @Column(nullable = false)
+    private Long unitId;
+
     private String internalBatchBarcode;
+
+    @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal quantity;
+
+    @Column(precision = 14, scale = 2)
     private BigDecimal unitCost;
+
+    @Column(precision = 14, scale = 2)
     private BigDecimal unitPrice;
+
     private String refTable;
     private Long refId;
     private String note;

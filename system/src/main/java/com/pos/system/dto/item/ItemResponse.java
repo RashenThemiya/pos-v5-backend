@@ -3,6 +3,7 @@ package com.pos.system.dto.item;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 public class ItemResponse {
@@ -20,4 +21,6 @@ public class ItemResponse {
     private Boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private String scaleItemCode;
+    private List<ItemUnitResponse> units;
 }

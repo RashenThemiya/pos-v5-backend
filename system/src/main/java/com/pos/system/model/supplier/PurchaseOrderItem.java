@@ -24,7 +24,8 @@ public class PurchaseOrderItem {
 
     @Column(nullable = false)
     private Long itemId;
-
+@Column(nullable = false)
+private Long unitId;
     @Column(nullable = false)
     private BigDecimal orderedQty;
 

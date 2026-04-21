@@ -23,6 +23,8 @@ public class PurchaseReturnItem {
     @Column(nullable = false)
     private Long itemId;
 
+    @Column(nullable = false)
+private Long unitId;
     private String internalBatchBarcode;
     @Column(nullable = false)
     private BigDecimal quantity;

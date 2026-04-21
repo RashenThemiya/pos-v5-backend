@@ -5,6 +5,8 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
+
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -13,6 +15,7 @@ import lombok.NoArgsConstructor;
         @UniqueConstraint(columnNames = {"branch_id", "scale_item_code"})
 })
 public class ScaleItemMapping {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -26,5 +29,10 @@ public class ScaleItemMapping {
     @Column(nullable = false)
     private Long itemId;
 
+    // usually KG / L base unit for weighed item
+    @Column(nullable = false)
+    private Long unitId;
+
     private Boolean isActive = true;
+    private LocalDateTime createdAt;
 }

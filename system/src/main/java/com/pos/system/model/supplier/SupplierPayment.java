@@ -26,7 +26,7 @@ public class SupplierPayment {
 
     private Long supplyId;
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;
 
     private String paymentMethod;

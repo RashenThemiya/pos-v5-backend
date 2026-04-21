@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "item_price_history")
 public class ItemPriceHistory {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long priceId;
@@ -22,9 +23,12 @@ public class ItemPriceHistory {
     private Long itemId;
 
     @Column(nullable = false)
+    private Long unitId;
+
+    @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal oldPrice;
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal newPrice;
 
     private String reason;

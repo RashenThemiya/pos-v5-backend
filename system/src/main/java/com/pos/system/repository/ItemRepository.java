@@ -14,4 +14,5 @@ public interface ItemRepository extends JpaRepository<Item, Long> {
     Optional<Item> findByBranchIdAndSku(Long branchId, String sku);
     boolean existsByBranchIdAndSku(Long branchId, String sku);
     Optional<Item> findByItemIdAndBranchId(Long itemId, Long branchId);
+        Optional<Item> findByItemIdAndIsActiveTrue(Long itemId);
 }
