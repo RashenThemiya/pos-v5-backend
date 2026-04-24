@@ -99,4 +99,52 @@ public class SupplierManagementController {
     public ResponseEntity<SupplierPaymentResponseDto> createSupplierPayment(@RequestBody SupplierPaymentRequestDto dto) {
         return ResponseEntity.ok(supplierManagementService.createSupplierPayment(dto));
     }
+
+    // =========================
+// SUPPLIER ITEMS
+// =========================
+
+@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+@PostMapping("/items")
+public ResponseEntity<SupplierItemResponseDto> addSupplierItem(@RequestBody SupplierItemRequestDto dto) {
+    return ResponseEntity.ok(supplierManagementService.addSupplierItem(dto));
+}
+
+@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+@PutMapping("/items/{supplierItemId}")
+public ResponseEntity<SupplierItemResponseDto> updateSupplierItem(
+        @PathVariable Long supplierItemId,
+        @RequestBody SupplierItemRequestDto dto
+) {
+    return ResponseEntity.ok(supplierManagementService.updateSupplierItem(supplierItemId, dto));
+}
+
+@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+@GetMapping("/items/branch/{branchId}/supplier/{supplierId}")
+public ResponseEntity<List<SupplierItemResponseDto>> getSupplierItemsBySupplier(
+        @PathVariable Long branchId,
+        @PathVariable Long supplierId
+) {
+    return ResponseEntity.ok(
+            supplierManagementService.getSupplierItemsBySupplier(branchId, supplierId)
+    );
+}
+
+@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+@GetMapping("/items/branch/{branchId}/item/{itemId}")
+public ResponseEntity<List<SupplierItemResponseDto>> getSuppliersByItem(
+        @PathVariable Long branchId,
+        @PathVariable Long itemId
+) {
+    return ResponseEntity.ok(
+            supplierManagementService.getSuppliersByItem(branchId, itemId)
+    );
+}
+
+@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+@DeleteMapping("/items/{supplierItemId}")
+public ResponseEntity<String> deleteSupplierItem(@PathVariable Long supplierItemId) {
+    supplierManagementService.deleteSupplierItem(supplierItemId);
+    return ResponseEntity.ok("Supplier item removed successfully");
+}
 }

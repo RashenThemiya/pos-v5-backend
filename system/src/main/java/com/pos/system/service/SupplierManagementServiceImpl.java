@@ -7,11 +7,6 @@ import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
 import com.pos.system.model.stock.StockMovement;
 import com.pos.system.model.supplier.*;
-import com.pos.system.repository.ItemRepository;
-import com.pos.system.repository.ItemUnitRepository;
-import com.pos.system.repository.StockBatchRepository;
-import com.pos.system.repository.StockMovementRepository;
-import com.pos.system.repository.StockRepository;
 import com.pos.system.repository.*;
 import com.pos.system.service.UnitConversionService;
 import jakarta.transaction.Transactional;
@@ -33,10 +28,14 @@ import java.util.UUID;
 public class SupplierManagementServiceImpl implements SupplierManagementService {
 
     private final SupplierRepository supplierRepository;
+    private final SupplierItemRepository supplierItemRepository;
+
     private final PurchaseOrderRepository purchaseOrderRepository;
     private final PurchaseOrderItemRepository purchaseOrderItemRepository;
+
     private final SupplyRepository supplyRepository;
     private final SupplyProductRepository supplyProductRepository;
+
     private final SupplierPaymentRepository supplierPaymentRepository;
     private final SupplierBalanceTransactionRepository supplierBalanceTransactionRepository;
 
@@ -47,6 +46,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final UnitConversionService unitConversionService;
+
+    // =========================
+    // SUPPLIER
+    // =========================
 
     @Override
     public SupplierResponseDto createSupplier(SupplierRequestDto dto) {
@@ -108,6 +111,116 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .toList();
     }
 
+    // =========================
+    // SUPPLIER ITEMS
+    // =========================
+
+    @Override
+    public SupplierItemResponseDto addSupplierItem(SupplierItemRequestDto dto) {
+
+        Supplier supplier = supplierRepository.findById(dto.getSupplierId())
+                .orElseThrow(() -> new RuntimeException("Supplier not found"));
+
+        if (!supplier.getBranchId().equals(dto.getBranchId())) {
+            throw new RuntimeException("Supplier does not belong to this branch");
+        }
+
+        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+
+        supplierItemRepository
+                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(
+                        dto.getBranchId(),
+                        dto.getSupplierId(),
+                        dto.getItemId(),
+                        dto.getUnitId()
+                )
+                .ifPresent(x -> {
+                    throw new RuntimeException("Supplier already supplies this item with this unit");
+                });
+
+        SupplierItem supplierItem = new SupplierItem();
+        supplierItem.setBranchId(dto.getBranchId());
+        supplierItem.setSupplierId(dto.getSupplierId());
+        supplierItem.setItemId(dto.getItemId());
+        supplierItem.setUnitId(dto.getUnitId());
+        supplierItem.setLastPurchaseCost(nvlMoney(dto.getLastPurchaseCost()));
+        supplierItem.setDefaultCostPrice(nvlMoney(dto.getDefaultCostPrice()));
+        supplierItem.setIsPreferred(dto.getIsPreferred() != null ? dto.getIsPreferred() : false);
+        supplierItem.setIsActive(dto.getIsActive() != null ? dto.getIsActive() : true);
+        supplierItem.setCreatedAt(LocalDateTime.now());
+        supplierItem.setUpdatedAt(LocalDateTime.now());
+
+        return mapSupplierItem(supplierItemRepository.save(supplierItem));
+    }
+
+    @Override
+    public SupplierItemResponseDto updateSupplierItem(Long supplierItemId, SupplierItemRequestDto dto) {
+
+        SupplierItem supplierItem = supplierItemRepository.findById(supplierItemId)
+                .orElseThrow(() -> new RuntimeException("Supplier item not found"));
+
+        Supplier supplier = supplierRepository.findById(supplierItem.getSupplierId())
+                .orElseThrow(() -> new RuntimeException("Supplier not found"));
+
+        if (!supplier.getBranchId().equals(dto.getBranchId())) {
+            throw new RuntimeException("Supplier does not belong to this branch");
+        }
+
+        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+
+        supplierItem.setBranchId(dto.getBranchId());
+        supplierItem.setSupplierId(dto.getSupplierId());
+        supplierItem.setItemId(dto.getItemId());
+        supplierItem.setUnitId(dto.getUnitId());
+        supplierItem.setLastPurchaseCost(nvlMoney(dto.getLastPurchaseCost()));
+        supplierItem.setDefaultCostPrice(nvlMoney(dto.getDefaultCostPrice()));
+
+        if (dto.getIsPreferred() != null) {
+            supplierItem.setIsPreferred(dto.getIsPreferred());
+        }
+
+        if (dto.getIsActive() != null) {
+            supplierItem.setIsActive(dto.getIsActive());
+        }
+
+        supplierItem.setUpdatedAt(LocalDateTime.now());
+
+        return mapSupplierItem(supplierItemRepository.save(supplierItem));
+    }
+
+    @Override
+    public List<SupplierItemResponseDto> getSupplierItemsBySupplier(Long branchId, Long supplierId) {
+        return supplierItemRepository
+                .findByBranchIdAndSupplierIdAndIsActiveTrue(branchId, supplierId)
+                .stream()
+                .map(this::mapSupplierItem)
+                .toList();
+    }
+
+    @Override
+    public List<SupplierItemResponseDto> getSuppliersByItem(Long branchId, Long itemId) {
+        return supplierItemRepository
+                .findByBranchIdAndItemIdAndIsActiveTrue(branchId, itemId)
+                .stream()
+                .map(this::mapSupplierItem)
+                .toList();
+    }
+
+    @Override
+    public void deleteSupplierItem(Long supplierItemId) {
+        SupplierItem supplierItem = supplierItemRepository.findById(supplierItemId)
+                .orElseThrow(() -> new RuntimeException("Supplier item not found"));
+
+        supplierItem.setIsActive(false);
+        supplierItem.setUpdatedAt(LocalDateTime.now());
+
+        supplierItemRepository.save(supplierItem);
+    }
+
+    // =========================
+    // PURCHASE ORDER
+    // =========================
+
     @Override
     public PurchaseOrderResponseDto createPurchaseOrder(PurchaseOrderRequestDto dto) {
         purchaseOrderRepository.findByPoNo(dto.getPoNo())
@@ -142,6 +255,13 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
         for (PurchaseOrderItemRequestDto itemDto : dto.getItems()) {
             validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
+
+            validateSupplierProvidesItem(
+                    dto.getBranchId(),
+                    dto.getSupplierId(),
+                    itemDto.getItemId(),
+                    itemDto.getUnitId()
+            );
 
             PurchaseOrderItem item = new PurchaseOrderItem();
             item.setPoId(savedPo.getPoId());
@@ -197,6 +317,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .toList();
     }
 
+    // =========================
+    // SUPPLY / GRN
+    // =========================
+
     @Override
     public SupplyResponseDto createSupply(SupplyRequestDto dto) {
         Supplier supplier = supplierRepository.findById(dto.getSupplierId())
@@ -246,6 +370,13 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         for (SupplyProductRequestDto p : dto.getProducts()) {
             validateItemAndUnit(dto.getBranchId(), p.getItemId(), p.getUnitId());
 
+            validateSupplierProvidesItem(
+                    dto.getBranchId(),
+                    dto.getSupplierId(),
+                    p.getItemId(),
+                    p.getUnitId()
+            );
+
             BigDecimal qtyReceived = nvlQty(p.getQuantityReceived());
             BigDecimal qtyBase = unitConversionService.toBaseQty(p.getItemId(), p.getUnitId(), qtyReceived);
 
@@ -277,6 +408,13 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             if ("COMPLETED".equalsIgnoreCase(status)) {
                 addPurchasedStock(savedSupply, savedProduct);
                 updatePoReceivedQtyIfNeeded(savedSupply.getPoId(), savedProduct);
+                updateSupplierItemLastPurchaseCost(
+                        dto.getBranchId(),
+                        dto.getSupplierId(),
+                        p.getItemId(),
+                        p.getUnitId(),
+                        savedProduct.getCostPrice()
+                );
             }
         }
 
@@ -367,6 +505,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .toList();
     }
 
+    // =========================
+    // SUPPLIER PAYMENT
+    // =========================
+
     @Override
     public SupplierPaymentResponseDto createSupplierPayment(SupplierPaymentRequestDto dto) {
         Supplier supplier = supplierRepository.findById(dto.getSupplierId())
@@ -420,6 +562,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .note(savedPayment.getNote())
                 .build();
     }
+
+    // =========================
+    // STOCK HELPERS
+    // =========================
 
     private void addPurchasedStock(Supply supply, SupplyProduct product) {
         Stock stock = stockRepository.findByBranchIdAndItemId(supply.getBranchId(), product.getItemId())
@@ -492,6 +638,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         }
     }
 
+    // =========================
+    // VALIDATION HELPERS
+    // =========================
+
     private void validateItemAndUnit(Long branchId, Long itemId, Long unitId) {
         Item item = itemRepository.findByItemIdAndIsActiveTrue(itemId)
                 .orElseThrow(() -> new RuntimeException("Item not found or inactive: " + itemId));
@@ -510,6 +660,36 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         }
     }
 
+    private void validateSupplierProvidesItem(Long branchId, Long supplierId, Long itemId, Long unitId) {
+        SupplierItem supplierItem = supplierItemRepository
+                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(branchId, supplierId, itemId, unitId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Supplier does not supply itemId=" + itemId + " with unitId=" + unitId
+                ));
+
+        if (!Boolean.TRUE.equals(supplierItem.getIsActive())) {
+            throw new RuntimeException(
+                    "Supplier item mapping is inactive for itemId=" + itemId + " with unitId=" + unitId
+            );
+        }
+    }
+
+    private void updateSupplierItemLastPurchaseCost(
+            Long branchId,
+            Long supplierId,
+            Long itemId,
+            Long unitId,
+            BigDecimal costPrice
+    ) {
+        supplierItemRepository
+                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(branchId, supplierId, itemId, unitId)
+                .ifPresent(si -> {
+                    si.setLastPurchaseCost(nvlMoney(costPrice));
+                    si.setUpdatedAt(LocalDateTime.now());
+                    supplierItemRepository.save(si);
+                });
+    }
+
     private String resolveProductBarcode(Long branchId, Long itemId, Long unitId, String requestBarcode) {
         if (requestBarcode != null && !requestBarcode.isBlank()) {
             return requestBarcode.trim();
@@ -522,8 +702,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private void validateDuplicatePoItems(List<PurchaseOrderItemRequestDto> items) {
         Set<String> keys = new HashSet<>();
+
         for (PurchaseOrderItemRequestDto item : items) {
             String key = item.getItemId() + "-" + item.getUnitId();
+
             if (!keys.add(key)) {
                 throw new RuntimeException("Duplicate PO item found for itemId/unitId: " + key);
             }
@@ -532,8 +714,16 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private void validateDuplicateSupplyLines(List<SupplyProductRequestDto> products) {
         Set<String> keys = new HashSet<>();
+
         for (SupplyProductRequestDto p : products) {
-            String key = p.getItemId() + "-" + p.getUnitId() + "-" + safe(p.getBatchNo()) + "-" + safe(p.getSupplierBatchBarcode());
+            String key = p.getItemId()
+                    + "-"
+                    + p.getUnitId()
+                    + "-"
+                    + safe(p.getBatchNo())
+                    + "-"
+                    + safe(p.getSupplierBatchBarcode());
+
             if (!keys.add(key)) {
                 throw new RuntimeException("Duplicate supply line found: " + key);
             }
@@ -543,8 +733,15 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private String generateUniqueInternalBatchBarcode(Long branchId, Long itemId) {
         for (int i = 0; i < 10; i++) {
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-            String code = "BT-" + branchId + "-" + itemId + "-" + timestamp + "-" +
-                    UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+
+            String code = "BT-"
+                    + branchId
+                    + "-"
+                    + itemId
+                    + "-"
+                    + timestamp
+                    + "-"
+                    + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
 
             boolean existsInSupplyProduct = supplyProductRepository.findByInternalBatchBarcode(code).isPresent();
             boolean existsInStockBatch = stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, code).isPresent();
@@ -553,8 +750,13 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 return code;
             }
         }
+
         throw new RuntimeException("Failed to generate unique internal batch barcode");
     }
+
+    // =========================
+    // MAPPERS
+    // =========================
 
     private SupplierResponseDto mapSupplier(Supplier supplier) {
         return SupplierResponseDto.builder()
@@ -572,6 +774,37 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .updatedAt(supplier.getUpdatedAt())
                 .build();
     }
+
+    private SupplierItemResponseDto mapSupplierItem(SupplierItem supplierItem) {
+        Item item = itemRepository.findById(supplierItem.getItemId()).orElse(null);
+        Supplier supplier = supplierRepository.findById(supplierItem.getSupplierId()).orElse(null);
+
+        return SupplierItemResponseDto.builder()
+                .supplierItemId(supplierItem.getSupplierItemId())
+                .branchId(supplierItem.getBranchId())
+
+                .supplierId(supplierItem.getSupplierId())
+                .supplierName(supplier != null ? supplier.getName() : null)
+
+                .itemId(supplierItem.getItemId())
+                .itemName(item != null ? item.getName() : null)
+                .sku(item != null ? item.getSku() : null)
+
+                .unitId(supplierItem.getUnitId())
+                .lastPurchaseCost(supplierItem.getLastPurchaseCost())
+                .defaultCostPrice(supplierItem.getDefaultCostPrice())
+
+                .isPreferred(supplierItem.getIsPreferred())
+                .isActive(supplierItem.getIsActive())
+
+                .createdAt(supplierItem.getCreatedAt())
+                .updatedAt(supplierItem.getUpdatedAt())
+                .build();
+    }
+
+    // =========================
+    // NULL HELPERS
+    // =========================
 
     private BigDecimal nvlQty(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
