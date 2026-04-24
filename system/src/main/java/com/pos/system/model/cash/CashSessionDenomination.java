@@ -20,6 +20,9 @@ public class CashSessionDenomination {
     @Column(nullable = false)
     private Long sessionId;
 
+    @Column(nullable = false, length = 20)
+    private String type;
+
     @Column(nullable = false)
     private BigDecimal denomination;
 
