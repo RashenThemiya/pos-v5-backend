@@ -8,8 +8,10 @@ import java.math.BigDecimal;
 public class BuyXGetYRuleRequest {
     private Long branchId;
     private Long buyItemId;
-    private BigDecimal buyQty;
+    private Long buyUnitId;             // e.g. unitId for "Box"
+    private BigDecimal buyQty;          // e.g. 2 (meaning 2 boxes)
     private Long getItemId;
-    private BigDecimal getQty;
-    private BigDecimal getDiscountPercent; // default 100 = fully free
+    private Long getUnitId;             // e.g. unitId for "Bottle"
+    private BigDecimal getQty;          // e.g. 1 (meaning 1 bottle free)
+    private BigDecimal getDiscountPercent; // 100 = fully free, 50 = half price
 }

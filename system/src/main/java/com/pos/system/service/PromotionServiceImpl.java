@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.promotion.*;
+import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.promotion.*;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
@@ -23,6 +24,7 @@ public class PromotionServiceImpl implements PromotionService {
     private final PromotionBatchRepository promotionBatchRepository;
     private final PromotionBuyXGetYRuleRepository buyXGetYRuleRepository;
     private final PromotionRedemptionRepository redemptionRepository;
+    private final ItemUnitRepository itemUnitRepository;
 
     // ─── Promotion CRUD ──────────────────────────────────────────────────────────
 
@@ -34,30 +36,24 @@ public class PromotionServiceImpl implements PromotionService {
                         throw new RuntimeException("Promo code already exists in this branch: " + request.getPromoCode());
                     });
         }
-
         Promotion p = new Promotion();
         mapRequestToPromotion(request, p);
         p.setCreatedAt(LocalDateTime.now());
         p.setUpdatedAt(LocalDateTime.now());
-
         return mapPromotion(promotionRepository.save(p), false);
     }
 
     @Override
     public PromotionResponse updatePromotion(Long promotionId, PromotionRequest request) {
         Promotion p = findPromoById(promotionId);
-
-        // if promo code changed, check uniqueness
         if (request.getPromoCode() != null && !request.getPromoCode().equals(p.getPromoCode())) {
             promotionRepository.findByBranchIdAndPromoCode(p.getBranchId(), request.getPromoCode())
                     .ifPresent(x -> {
                         throw new RuntimeException("Promo code already exists: " + request.getPromoCode());
                     });
         }
-
         mapRequestToPromotion(request, p);
         p.setUpdatedAt(LocalDateTime.now());
-
         return mapPromotion(promotionRepository.save(p), false);
     }
 
@@ -90,17 +86,25 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public PromotionItemResponse addItemToPromotion(Long promotionId, PromotionItemRequest request) {
-        findPromoById(promotionId);
+        Promotion promo = findPromoById(promotionId);
+
+        if (!promo.getType().equals("ITEM_PERCENTAGE") && !promo.getType().equals("ITEM_FIXED")) {
+            throw new RuntimeException("Items can only be added to ITEM_PERCENTAGE or ITEM_FIXED promotions");
+        }
 
         promotionItemRepository.findByPromotionIdAndItemId(promotionId, request.getItemId())
                 .ifPresent(x -> {
                     throw new RuntimeException("Item already linked to this promotion");
                 });
 
+        // validate unit belongs to item
+        validateUnitBelongsToItem(request.getItemId(), request.getUnitId());
+
         PromotionItem item = new PromotionItem();
         item.setBranchId(request.getBranchId());
         item.setPromotionId(promotionId);
         item.setItemId(request.getItemId());
+        item.setUnitId(request.getUnitId());
         item.setMaxQty(request.getMaxQty());
         item.setUsedQty(BigDecimal.ZERO);
         item.setIsActive(true);
@@ -126,7 +130,11 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public PromotionBatchResponse addBatchToPromotion(Long promotionId, PromotionBatchRequest request) {
-        findPromoById(promotionId);
+        Promotion promo = findPromoById(promotionId);
+
+        if (!promo.getType().equals("BATCH")) {
+            throw new RuntimeException("Batches can only be added to BATCH type promotions");
+        }
 
         promotionBatchRepository.findByPromotionIdAndBarcode(promotionId, request.getBarcode())
                 .ifPresent(x -> {
@@ -162,14 +170,23 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public BuyXGetYRuleResponse addBuyXGetYRule(Long promotionId, BuyXGetYRuleRequest request) {
-        findPromoById(promotionId);
+        Promotion promo = findPromoById(promotionId);
+
+        if (!promo.getType().equals("BUY_X_GET_Y")) {
+            throw new RuntimeException("Rules can only be added to BUY_X_GET_Y type promotions");
+        }
+
+        validateUnitBelongsToItem(request.getBuyItemId(), request.getBuyUnitId());
+        validateUnitBelongsToItem(request.getGetItemId(), request.getGetUnitId());
 
         PromotionBuyXGetYRule rule = new PromotionBuyXGetYRule();
         rule.setBranchId(request.getBranchId());
         rule.setPromotionId(promotionId);
         rule.setBuyItemId(request.getBuyItemId());
+        rule.setBuyUnitId(request.getBuyUnitId());
         rule.setBuyQty(request.getBuyQty());
         rule.setGetItemId(request.getGetItemId());
+        rule.setGetUnitId(request.getGetUnitId());
         rule.setGetQty(request.getGetQty());
         rule.setGetDiscountPercent(
                 request.getGetDiscountPercent() != null ? request.getGetDiscountPercent() : BigDecimal.valueOf(100)
@@ -192,7 +209,7 @@ public class PromotionServiceImpl implements PromotionService {
                 .stream().map(this::mapRule).toList();
     }
 
-    // ─── Apply Promotion ─────────────────────────────────────────────────────────
+    // ─── Apply ───────────────────────────────────────────────────────────────────
 
     @Override
     public ApplyPromotionResponse applyPromotion(Long promotionId, ApplyPromotionRequest request) {
@@ -206,10 +223,8 @@ public class PromotionServiceImpl implements PromotionService {
         if (request.getPromoCode() == null || request.getPromoCode().isBlank()) {
             throw new RuntimeException("Promo code is required");
         }
-
         Promotion promo = promotionRepository.findByBranchIdAndPromoCode(request.getBranchId(), request.getPromoCode())
                 .orElseThrow(() -> new RuntimeException("Invalid promo code: " + request.getPromoCode()));
-
         validatePromotion(promo, request);
         return calculateDiscount(promo, request);
     }
@@ -227,22 +242,20 @@ public class PromotionServiceImpl implements PromotionService {
                     results.add(result);
                 }
             } catch (Exception ignored) {
-                // promo not applicable - skip
+                // not applicable - skip
             }
         }
 
-        // sort by discount amount descending
         results.sort((a, b) -> b.getDiscountAmount().compareTo(a.getDiscountAmount()));
         return results;
     }
 
-    // ─── Core discount calculation ───────────────────────────────────────────────
+    // ─── Core discount calculation ────────────────────────────────────────────────
 
     private void validatePromotion(Promotion promo, ApplyPromotionRequest request) {
         if (!Boolean.TRUE.equals(promo.getIsActive())) {
             throw new RuntimeException("Promotion is not active");
         }
-
         LocalDateTime now = LocalDateTime.now();
         if (promo.getStartAt() != null && now.isBefore(promo.getStartAt())) {
             throw new RuntimeException("Promotion has not started yet");
@@ -250,24 +263,21 @@ public class PromotionServiceImpl implements PromotionService {
         if (promo.getEndAt() != null && now.isAfter(promo.getEndAt())) {
             throw new RuntimeException("Promotion has expired");
         }
-
         if (promo.getMinBillTotal() != null &&
                 request.getBillTotal().compareTo(promo.getMinBillTotal()) < 0) {
-            throw new RuntimeException("Bill total does not meet minimum requirement of " + promo.getMinBillTotal());
+            throw new RuntimeException("Bill total does not meet minimum of " + promo.getMinBillTotal());
         }
-
         if (promo.getMaxUsesTotal() != null) {
             long used = redemptionRepository.countByPromotionId(promo.getPromotionId());
             if (used >= promo.getMaxUsesTotal()) {
                 throw new RuntimeException("Promotion has reached its maximum usage limit");
             }
         }
-
         if (promo.getMaxUsesPerCustomer() != null && request.getCustomerId() != null) {
             long usedByCustomer = redemptionRepository.countByPromotionIdAndCustomerId(
                     promo.getPromotionId(), request.getCustomerId());
             if (usedByCustomer >= promo.getMaxUsesPerCustomer()) {
-                throw new RuntimeException("Customer has reached the max uses for this promotion");
+                throw new RuntimeException("Customer has reached max uses for this promotion");
             }
         }
     }
@@ -279,33 +289,46 @@ public class PromotionServiceImpl implements PromotionService {
         switch (promo.getType()) {
 
             case "PERCENTAGE" -> {
-                // % off the entire bill
                 discountAmount = request.getBillTotal()
                         .multiply(promo.getValue())
                         .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
             }
 
             case "FIXED" -> {
-                // flat amount off bill, capped at bill total
                 discountAmount = promo.getValue().min(request.getBillTotal());
             }
 
             case "ITEM_PERCENTAGE" -> {
-                // % off specific items
                 List<PromotionItem> promoItems = promotionItemRepository.findByPromotionIdAndIsActiveTrue(promo.getPromotionId());
                 for (ApplyPromotionRequest.CartItemDto cartItem : request.getCartItems()) {
                     promoItems.stream()
                             .filter(pi -> pi.getItemId().equals(cartItem.getItemId()))
                             .findFirst()
                             .ifPresent(pi -> {
-                                BigDecimal lineTotal = cartItem.getUnitPrice().multiply(cartItem.getQty());
-                                BigDecimal lineDiscount = lineTotal
+                                // convert both qtys to base units to compare correctly
+                                BigDecimal cartQtyInBase = toBaseQty(cartItem.getItemId(), cartItem.getUnitId(), cartItem.getQty());
+                                BigDecimal promoQtyInBase = toBaseQty(pi.getItemId(), pi.getUnitId(), pi.getMaxQty() != null ? pi.getMaxQty() : cartItem.getQty());
+
+                                // only discount up to maxQty if set
+                                BigDecimal applicableQtyInBase = pi.getMaxQty() != null
+                                        ? cartQtyInBase.min(promoQtyInBase)
+                                        : cartQtyInBase;
+
+                                // convert back to cart unit price basis
+                                BigDecimal cartUnitMultiplier = getMultiplierToBase(cartItem.getItemId(), cartItem.getUnitId());
+                                BigDecimal applicableQtyInCartUnit = cartUnitMultiplier.compareTo(BigDecimal.ZERO) == 0
+                                        ? BigDecimal.ZERO
+                                        : applicableQtyInBase.divide(cartUnitMultiplier, 4, RoundingMode.HALF_UP);
+
+                                BigDecimal lineDiscount = cartItem.getUnitPrice()
+                                        .multiply(applicableQtyInCartUnit)
                                         .multiply(promo.getValue())
                                         .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+
                                 lineDiscounts.add(ApplyPromotionResponse.LineDiscountDto.builder()
                                         .itemId(cartItem.getItemId())
                                         .discountAmount(lineDiscount)
-                                        .reason(promo.getValue() + "% off")
+                                        .reason(promo.getValue() + "% off (unit: " + getUnitName(pi.getUnitId()) + ")")
                                         .build());
                             });
                 }
@@ -315,7 +338,6 @@ public class PromotionServiceImpl implements PromotionService {
             }
 
             case "ITEM_FIXED" -> {
-                // fixed amount off specific items
                 List<PromotionItem> promoItems = promotionItemRepository.findByPromotionIdAndIsActiveTrue(promo.getPromotionId());
                 for (ApplyPromotionRequest.CartItemDto cartItem : request.getCartItems()) {
                     promoItems.stream()
@@ -327,7 +349,7 @@ public class PromotionServiceImpl implements PromotionService {
                                 lineDiscounts.add(ApplyPromotionResponse.LineDiscountDto.builder()
                                         .itemId(cartItem.getItemId())
                                         .discountAmount(lineDiscount)
-                                        .reason("Fixed " + promo.getValue() + " off")
+                                        .reason("Fixed " + promo.getValue() + " off (unit: " + getUnitName(pi.getUnitId()) + ")")
                                         .build());
                             });
                 }
@@ -339,26 +361,45 @@ public class PromotionServiceImpl implements PromotionService {
             case "BUY_X_GET_Y" -> {
                 List<PromotionBuyXGetYRule> rules = buyXGetYRuleRepository.findByPromotionId(promo.getPromotionId());
                 for (PromotionBuyXGetYRule rule : rules) {
-                    // check if buy item is in cart with sufficient qty
-                    boolean buyQtyMet = request.getCartItems().stream()
-                            .filter(c -> c.getItemId().equals(rule.getBuyItemId()))
-                            .anyMatch(c -> c.getQty().compareTo(rule.getBuyQty()) >= 0);
 
-                    if (buyQtyMet) {
-                        // find the free/discounted item in the cart
+                    // required buy qty in base units
+                    BigDecimal requiredBuyQtyInBase = toBaseQty(rule.getBuyItemId(), rule.getBuyUnitId(), rule.getBuyQty());
+
+                    // check cart has enough of the buy item (in base units)
+                    BigDecimal cartBuyQtyInBase = request.getCartItems().stream()
+                            .filter(c -> c.getItemId().equals(rule.getBuyItemId()))
+                            .map(c -> toBaseQty(c.getItemId(), c.getUnitId(), c.getQty()))
+                            .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+                    if (cartBuyQtyInBase.compareTo(requiredBuyQtyInBase) >= 0) {
+
+                        // required get qty in base units
+                        BigDecimal requiredGetQtyInBase = toBaseQty(rule.getGetItemId(), rule.getGetUnitId(), rule.getGetQty());
+
                         request.getCartItems().stream()
                                 .filter(c -> c.getItemId().equals(rule.getGetItemId()))
                                 .findFirst()
                                 .ifPresent(getItem -> {
-                                    BigDecimal discountableQty = getItem.getQty().min(rule.getGetQty());
+                                    BigDecimal cartGetQtyInBase = toBaseQty(getItem.getItemId(), getItem.getUnitId(), getItem.getQty());
+                                    BigDecimal discountableQtyInBase = cartGetQtyInBase.min(requiredGetQtyInBase);
+
+                                    // convert discountable base qty back to cart unit for price calc
+                                    BigDecimal cartGetMultiplier = getMultiplierToBase(getItem.getItemId(), getItem.getUnitId());
+                                    BigDecimal discountableQtyInCartUnit = cartGetMultiplier.compareTo(BigDecimal.ZERO) == 0
+                                            ? BigDecimal.ZERO
+                                            : discountableQtyInBase.divide(cartGetMultiplier, 4, RoundingMode.HALF_UP);
+
                                     BigDecimal lineDiscount = getItem.getUnitPrice()
-                                            .multiply(discountableQty)
+                                            .multiply(discountableQtyInCartUnit)
                                             .multiply(rule.getGetDiscountPercent())
                                             .divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+
                                     lineDiscounts.add(ApplyPromotionResponse.LineDiscountDto.builder()
                                             .itemId(rule.getGetItemId())
                                             .discountAmount(lineDiscount)
-                                            .reason("Buy " + rule.getBuyQty() + " Get " + rule.getGetQty() + " (" + rule.getGetDiscountPercent() + "% off)")
+                                            .reason("Buy " + rule.getBuyQty() + " " + getUnitName(rule.getBuyUnitId())
+                                                    + " Get " + rule.getGetQty() + " " + getUnitName(rule.getGetUnitId())
+                                                    + " (" + rule.getGetDiscountPercent() + "% off)")
                                             .build());
                                 });
                     }
@@ -369,7 +410,6 @@ public class PromotionServiceImpl implements PromotionService {
             }
 
             case "BATCH" -> {
-                // discount for items from specific stock batches (by barcode)
                 for (ApplyPromotionRequest.CartItemDto cartItem : request.getCartItems()) {
                     if (cartItem.getBatchBarcode() == null) continue;
                     promotionBatchRepository
@@ -406,7 +446,37 @@ public class PromotionServiceImpl implements PromotionService {
                 .build();
     }
 
-    // ─── Private helpers ─────────────────────────────────────────────────────────
+    // ─── Unit conversion helpers ──────────────────────────────────────────────────
+
+    /**
+     * Converts a qty in the given unit to base unit qty.
+     * e.g. qty=2, unit=Box (multiplierToBase=12) → 24 base units
+     */
+    private BigDecimal toBaseQty(Long itemId, Long unitId, BigDecimal qty) {
+        BigDecimal multiplier = getMultiplierToBase(itemId, unitId);
+        return qty.multiply(multiplier);
+    }
+
+    private BigDecimal getMultiplierToBase(Long itemId, Long unitId) {
+        return itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
+                .map(ItemUnit::getMultiplierToBase)
+                .orElseThrow(() -> new RuntimeException(
+                        "Unit " + unitId + " not found for item " + itemId));
+    }
+
+    private String getUnitName(Long unitId) {
+        return itemUnitRepository.findByUnitIdAndIsActiveTrue(unitId)
+                .map(ItemUnit::getUnitName)
+                .orElse("unit");
+    }
+
+    private void validateUnitBelongsToItem(Long itemId, Long unitId) {
+        itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
+                .orElseThrow(() -> new RuntimeException(
+                        "Unit " + unitId + " does not belong to item " + itemId));
+    }
+
+    // ─── Private helpers ──────────────────────────────────────────────────────────
 
     private void mapRequestToPromotion(PromotionRequest request, Promotion p) {
         p.setBranchId(request.getBranchId());
@@ -430,7 +500,7 @@ public class PromotionServiceImpl implements PromotionService {
                 .orElseThrow(() -> new RuntimeException("Promotion not found: " + promotionId));
     }
 
-    // ─── Mappers ─────────────────────────────────────────────────────────────────
+    // ─── Mappers ──────────────────────────────────────────────────────────────────
 
     private PromotionResponse mapPromotion(Promotion p, boolean includeDetails) {
         PromotionResponse.PromotionResponseBuilder builder = PromotionResponse.builder()
@@ -470,6 +540,8 @@ public class PromotionServiceImpl implements PromotionService {
                 .id(i.getId())
                 .promotionId(i.getPromotionId())
                 .itemId(i.getItemId())
+                .unitId(i.getUnitId())
+                .unitName(getUnitName(i.getUnitId()))
                 .maxQty(i.getMaxQty())
                 .usedQty(i.getUsedQty())
                 .isActive(i.getIsActive())
@@ -492,8 +564,12 @@ public class PromotionServiceImpl implements PromotionService {
                 .ruleId(r.getRuleId())
                 .promotionId(r.getPromotionId())
                 .buyItemId(r.getBuyItemId())
+                .buyUnitId(r.getBuyUnitId())
+                .buyUnitName(getUnitName(r.getBuyUnitId()))
                 .buyQty(r.getBuyQty())
                 .getItemId(r.getGetItemId())
+                .getUnitId(r.getGetUnitId())
+                .getUnitName(getUnitName(r.getGetUnitId()))
                 .getQty(r.getGetQty())
                 .getDiscountPercent(r.getGetDiscountPercent())
                 .build();

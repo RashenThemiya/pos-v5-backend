@@ -15,8 +15,12 @@ public class BuyXGetYRuleResponse {
     private Long ruleId;
     private Long promotionId;
     private Long buyItemId;
+    private Long buyUnitId;
+    private String buyUnitName;         // populated for readability
     private BigDecimal buyQty;
     private Long getItemId;
+    private Long getUnitId;
+    private String getUnitName;         // populated for readability
     private BigDecimal getQty;
     private BigDecimal getDiscountPercent;
 }

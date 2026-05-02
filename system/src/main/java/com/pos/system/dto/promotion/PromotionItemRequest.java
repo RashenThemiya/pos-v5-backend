@@ -8,5 +8,6 @@ import java.math.BigDecimal;
 public class PromotionItemRequest {
     private Long branchId;
     private Long itemId;
+    private Long unitId;    // which unit this discount applies to
     private BigDecimal maxQty;
 }

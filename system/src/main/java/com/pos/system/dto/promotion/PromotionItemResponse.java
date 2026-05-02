@@ -15,6 +15,8 @@ public class PromotionItemResponse {
     private Long id;
     private Long promotionId;
     private Long itemId;
+    private Long unitId;
+    private String unitName;        // populated for readability
     private BigDecimal maxQty;
     private BigDecimal usedQty;
     private Boolean isActive;
