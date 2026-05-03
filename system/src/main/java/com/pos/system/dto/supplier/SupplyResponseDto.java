@@ -10,22 +10,41 @@ import java.util.List;
 @Data
 @Builder
 public class SupplyResponseDto {
+
     private Long supplyId;
     private Long branchId;
     private Long supplierId;
     private Long poId;
+
     private String grnNo;
     private String invoiceNo;
+
     private BigDecimal subtotal;
     private BigDecimal discount;
     private BigDecimal taxAmount;
     private BigDecimal rounding;
     private BigDecimal total;
+
+    // =========================
+    // 🔥 PAYMENT TRACKING
+    // =========================
+
     private BigDecimal paidAmount;
+    private BigDecimal payableAmount;
+    private BigDecimal balanceAmount;
+    private String paymentStatus; // UNPAID / PARTIAL / PAID
+
     private String paymentMethod;
+
+    // =========================
+
     private String status;
+
     private LocalDateTime supplyDate;
+
     private Long receivedBy;
+
     private String notes;
+
     private List<SupplyProductResponseDto> products;
 }

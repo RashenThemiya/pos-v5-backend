@@ -7,6 +7,19 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SupplyRepository extends JpaRepository<Supply, Long> {
-    List<Supply> findByBranchId(Long branchId);
+
     Optional<Supply> findByGrnNo(String grnNo);
+
+    List<Supply> findByBranchId(Long branchId);
+
+    List<Supply> findByBranchIdAndPaymentStatusNotOrderBySupplyDateDesc(
+            Long branchId,
+            String paymentStatus
+    );
+
+    List<Supply> findByBranchIdAndSupplierIdAndPaymentStatusNotOrderBySupplyDateDesc(
+            Long branchId,
+            Long supplierId,
+            String paymentStatus
+    );
 }

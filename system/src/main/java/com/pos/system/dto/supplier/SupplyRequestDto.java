@@ -8,21 +8,32 @@ import java.util.List;
 
 @Data
 public class SupplyRequestDto {
+
     private Long branchId;
     private Long supplierId;
     private Long poId;
+
     private String grnNo;
     private String invoiceNo;
+
     private BigDecimal subtotal;
     private BigDecimal discount;
     private BigDecimal taxAmount;
     private BigDecimal rounding;
     private BigDecimal total;
+
+    // Optional initial payment (e.g., cash at GRN time)
     private BigDecimal paidAmount;
-    private String paymentMethod;
-    private String status;
+
+    private String paymentMethod; // CASH / CREDIT / BANK_TRANSFER etc.
+
+    private String status; // COMPLETED / PENDING
+
     private LocalDateTime supplyDate;
+
     private Long receivedBy;
+
     private String notes;
+
     private List<SupplyProductRequestDto> products;
 }

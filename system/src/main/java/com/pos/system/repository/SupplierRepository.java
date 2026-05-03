@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SupplierRepository extends JpaRepository<Supplier, Long> {
+
     List<Supplier> findByBranchId(Long branchId);
+
     Optional<Supplier> findByBranchIdAndName(Long branchId, String name);
 }
