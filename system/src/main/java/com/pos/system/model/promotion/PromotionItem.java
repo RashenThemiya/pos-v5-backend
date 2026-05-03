@@ -26,6 +26,11 @@ public class PromotionItem {
     @Column(nullable = false)
     private Long itemId;
 
+    // which unit the maxQty and discount applies to
+    // e.g. unitId for "Box" means discount applies when sold by the box
+    @Column(nullable = false)
+    private Long unitId;
+
     private BigDecimal maxQty;
     private BigDecimal usedQty = BigDecimal.ZERO;
     private Boolean isActive = true;
