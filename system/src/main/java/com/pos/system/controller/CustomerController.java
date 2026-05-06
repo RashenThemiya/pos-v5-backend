@@ -7,6 +7,8 @@ import com.pos.system.model.customer.CustomerBalanceTransaction;
 import com.pos.system.model.customer.LoyaltyTransaction;
 import com.pos.system.service.CustomerService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -85,7 +87,7 @@ public class CustomerController {
             @PathVariable Long customerId,
             @RequestParam(required = false) String type) {
         List<CustomerBalanceTransactionResponse> transactions;
-        
+
         if (type != null && !type.isEmpty()) {
             transactions = customerService.getBalanceTransactionsByType(customerId, type)
                     .stream()
@@ -158,6 +160,14 @@ public class CustomerController {
             @RequestBody RedeemPointsRequest request) {
         customerService.redeemPoints(customerId, request.getPoints(), request.getReason());
         return ResponseEntity.ok(ApiResponse.success("Points redeemed successfully", toResponse(customerService.getById(customerId))));
+    }
+
+    @GetMapping("/branch/page/{branchId}")
+    public Page<Customer> getCustomersByBranch(
+            @PathVariable Long branchId,
+            Pageable pageable) {
+
+        return customerService.getByBranch(branchId, pageable);
     }
 
     // ==================== HELPER METHODS ====================
