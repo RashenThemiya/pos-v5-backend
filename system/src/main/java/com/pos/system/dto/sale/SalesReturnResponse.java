@@ -1,0 +1,44 @@
+package com.pos.system.dto.sale;
+
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
+import java.util.List;
+
+@Data
+@Builder
+@NoArgsConstructor
+@AllArgsConstructor
+public class SalesReturnResponse {
+    private Long returnId;
+    private Long orderId;
+    private String invoiceNo;
+    private Long branchId;
+    private Long customerId;
+    private LocalDateTime returnDate;
+    private String refundMethod;
+    private BigDecimal refundAmount;
+    private String reason;
+    private Long processedBy;
+    private String status;
+    private List<ReturnItemResponse> items;
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class ReturnItemResponse {
+        private Long returnItemId;
+        private Long itemId;
+        private String itemName;
+        private String internalBatchBarcode;
+        private BigDecimal quantity;
+        private BigDecimal unitPrice;
+        private BigDecimal lineRefund;
+        private String condition;
+    }
+}

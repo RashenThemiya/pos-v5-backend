@@ -26,6 +26,7 @@ public class SalesReturnItem {
     private String internalBatchBarcode;
     @Column(nullable = false)
     private BigDecimal quantity;
+    @Column(name = "`condition`")
     private String condition;
     @Column(nullable = false)
     private BigDecimal unitPrice;
