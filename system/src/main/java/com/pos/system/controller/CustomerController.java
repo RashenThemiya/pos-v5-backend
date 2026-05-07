@@ -162,12 +162,20 @@ public class CustomerController {
         return ResponseEntity.ok(ApiResponse.success("Points redeemed successfully", toResponse(customerService.getById(customerId))));
     }
 
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_VIEW')")
     @GetMapping("/branch/page/{branchId}")
     public Page<Customer> getCustomersByBranch(
             @PathVariable Long branchId,
             Pageable pageable) {
 
         return customerService.getByBranch(branchId, pageable);
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_VIEW')")
+    @GetMapping("/page")
+    public Page<Customer> getAllCustomers(Pageable pageable) {
+        return customerService.getAll(pageable);
     }
 
     // ==================== HELPER METHODS ====================

@@ -93,6 +93,10 @@ public class CustomerService {
         return customerRepository.findByBranchId(branchId, pageable);
     }
 
+    public Page<Customer> getAll(Pageable pageable) {
+        return customerRepository.findAll(pageable);
+    }
+
     public Customer searchByPhone(String phone) {
         return customerRepository.findByPhone(phone)
                 .orElseThrow(() -> new RuntimeException("Customer not found with phone: " + phone));
