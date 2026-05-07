@@ -1,0 +1,612 @@
+package com.pos.system.service;
+
+import com.pos.system.dto.sale.*;
+import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.sale.*;
+import com.pos.system.model.stock.Stock;
+import com.pos.system.model.stock.StockBatch;
+import com.pos.system.model.stock.StockMovement;
+import com.pos.system.repository.*;
+import jakarta.transaction.Transactional;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+@Transactional
+public class SalesServiceImpl implements SalesService {
+
+    private final CustomerOrderRepository orderRepository;
+    private final OrderProductRepository orderProductRepository;
+    private final PaymentRepository paymentRepository;
+    private final OrderStatusHistoryRepository statusHistoryRepository;
+    private final SalesReturnRepository returnRepository;
+    private final SalesReturnItemRepository returnItemRepository;
+    private final StockRepository stockRepository;
+    private final StockBatchRepository stockBatchRepository;
+    private final StockMovementRepository stockMovementRepository;
+    private final CashSessionTransactionRepository cashSessionTransactionRepository;
+    private final ItemUnitRepository itemUnitRepository;
+    private final ItemRepository itemRepository;
+
+    // ─── Orders ──────────────────────────────────────────────────────────────────
+
+    @Override
+    public OrderResponse createOrder(CreateOrderRequest request) {
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new RuntimeException("Order must have at least one item");
+        }
+
+        CustomerOrder order = new CustomerOrder();
+        order.setBranchId(request.getBranchId());
+        order.setInvoiceNo(generateInvoiceNo(request.getBranchId()));
+        order.setUserId(request.getUserId());
+        order.setCustomerId(request.getCustomerId());
+        order.setCashSessionId(request.getCashSessionId());
+        order.setDiscount(nvl(request.getDiscount()));
+        order.setRounding(nvl(request.getRounding()));
+        order.setNotes(request.getNotes());
+        order.setStatus("COMPLETED");
+        order.setPaymentStatus("UNPAID");
+        order.setOrderDate(LocalDateTime.now());
+        order.setUpdatedAt(LocalDateTime.now());
+        order.setTaxAmount(BigDecimal.ZERO);
+
+        CustomerOrder savedOrder = orderRepository.save(order);
+
+        // save items and deduct stock
+        BigDecimal subtotal = BigDecimal.ZERO;
+        for (OrderProductRequest item : request.getItems()) {
+            BigDecimal lineDiscount = nvl(item.getDiscount());
+            BigDecimal lineTotal = item.getUnitPrice()
+                    .multiply(item.getQuantity())
+                    .subtract(lineDiscount)
+                    .setScale(2, RoundingMode.HALF_UP);
+
+            OrderProduct op = new OrderProduct();
+            op.setOrderId(savedOrder.getOrderId());
+            op.setItemId(item.getItemId());
+            op.setUnitId(item.getUnitId());
+            op.setBatchBarcode(item.getBatchBarcode());
+            op.setQuantity(item.getQuantity());
+            op.setUnitPrice(item.getUnitPrice());
+            op.setDiscount(lineDiscount);
+            op.setLineTotal(lineTotal);
+            op.setCreatedAt(LocalDateTime.now());
+            orderProductRepository.save(op);
+
+            subtotal = subtotal.add(lineTotal);
+
+            // deduct stock
+            deductStock(request.getBranchId(), item, savedOrder.getOrderId(), request.getUserId());
+        }
+
+        // update order totals
+        BigDecimal total = subtotal
+                .subtract(nvl(request.getDiscount()))
+                .add(nvl(request.getRounding()))
+                .setScale(2, RoundingMode.HALF_UP)
+                .max(BigDecimal.ZERO);
+
+        savedOrder.setSubtotal(subtotal);
+        savedOrder.setTotal(total);
+        orderRepository.save(savedOrder);
+
+        recordStatusHistory(savedOrder.getOrderId(), null, "COMPLETED", request.getUserId(), "Order created");
+
+        return buildOrderResponse(savedOrder);
+    }
+
+    @Override
+    public OrderResponse getOrderById(Long orderId) {
+        return buildOrderResponse(findOrderById(orderId));
+    }
+
+    @Override
+    public OrderResponse getOrderByInvoiceNo(String invoiceNo) {
+        CustomerOrder order = orderRepository.findByInvoiceNo(invoiceNo)
+                .orElseThrow(() -> new RuntimeException("Invoice not found: " + invoiceNo));
+        return buildOrderResponse(order);
+    }
+
+    @Override
+    public List<OrderResponse> getOrdersByBranch(Long branchId) {
+        return orderRepository.findByBranchIdOrderByOrderDateDesc(branchId)
+                .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
+    public List<OrderResponse> getOrdersBySession(Long branchId, Long sessionId) {
+        return orderRepository.findByBranchIdAndCashSessionIdOrderByOrderDateDesc(branchId, sessionId)
+                .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
+    public List<OrderResponse> getOrdersByDateRange(Long branchId, LocalDateTime from, LocalDateTime to) {
+        return orderRepository.findByBranchIdAndOrderDateBetweenOrderByOrderDateDesc(branchId, from, to)
+                .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
+    public OrderResponse cancelOrder(Long orderId, CancelOrderRequest request) {
+        CustomerOrder order = findOrderById(orderId);
+
+        if ("CANCELLED".equals(order.getStatus())) {
+            throw new RuntimeException("Order is already cancelled");
+        }
+
+        // reverse stock for each item
+        List<OrderProduct> products = orderProductRepository.findByOrderId(orderId);
+        for (OrderProduct op : products) {
+            reverseStock(order.getBranchId(), op, orderId, request.getCancelledBy());
+        }
+
+        String oldStatus = order.getStatus();
+        order.setStatus("CANCELLED");
+        order.setCancelledBy(request.getCancelledBy());
+        order.setCancelledAt(LocalDateTime.now());
+        order.setCancelReason(request.getCancelReason());
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+
+        recordStatusHistory(orderId, oldStatus, "CANCELLED", request.getCancelledBy(), request.getCancelReason());
+
+        return buildOrderResponse(order);
+    }
+
+    // ─── Payments ────────────────────────────────────────────────────────────────
+
+    @Override
+    public OrderResponse processPayment(Long orderId, PaymentRequest request) {
+        CustomerOrder order = findOrderById(orderId);
+
+        if ("CANCELLED".equals(order.getStatus())) {
+            throw new RuntimeException("Cannot pay for a cancelled order");
+        }
+        if ("PAID".equals(order.getPaymentStatus())) {
+            throw new RuntimeException("Order is already fully paid");
+        }
+
+        BigDecimal totalPaid = BigDecimal.ZERO;
+        for (PaymentRequest.PaymentLineDto line : request.getPayments()) {
+            Payment payment = new Payment();
+            payment.setBranchId(order.getBranchId());
+            payment.setOrderId(orderId);
+            payment.setCustomerId(order.getCustomerId());
+            payment.setCashSessionId(order.getCashSessionId());
+            payment.setAmount(line.getAmount());
+            payment.setTenderedAmount(line.getTenderedAmount());
+            payment.setChangeAmount(
+                    line.getTenderedAmount() != null
+                            ? line.getTenderedAmount().subtract(line.getAmount()).max(BigDecimal.ZERO)
+                            : BigDecimal.ZERO
+            );
+            payment.setPaymentMethod(line.getPaymentMethod());
+            payment.setPaymentDate(LocalDateTime.now());
+            payment.setReceivedBy(request.getReceivedBy());
+            payment.setReferenceNo(line.getReferenceNo());
+            payment.setNote(line.getNote());
+            Payment savedPayment = paymentRepository.save(payment);
+
+            totalPaid = totalPaid.add(line.getAmount());
+
+            // write cash session transaction
+            if (order.getCashSessionId() != null) {
+                CashSessionTransaction txn = new CashSessionTransaction();
+                txn.setSessionId(order.getCashSessionId());
+                txn.setType("SALE");
+                txn.setAmount(line.getAmount());
+                txn.setPaymentMethod(line.getPaymentMethod());
+                txn.setPaymentId(savedPayment.getPaymentId());
+                txn.setNote("Invoice: " + order.getInvoiceNo());
+                txn.setCreatedBy(request.getReceivedBy());
+                txn.setCreatedAt(LocalDateTime.now());
+                cashSessionTransactionRepository.save(txn);
+            }
+        }
+
+        // update payment status
+        BigDecimal alreadyPaid = paymentRepository.findByOrderId(orderId).stream()
+                .map(Payment::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (alreadyPaid.compareTo(nvl(order.getTotal())) >= 0) {
+            order.setPaymentStatus("PAID");
+        } else {
+            order.setPaymentStatus("PARTIAL");
+        }
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+
+        return buildOrderResponse(order);
+    }
+
+    @Override
+    public List<PaymentResponse> getPaymentsByOrder(Long orderId) {
+        return paymentRepository.findByOrderId(orderId)
+                .stream().map(this::mapPayment).toList();
+    }
+
+    // ─── Returns ─────────────────────────────────────────────────────────────────
+
+    @Override
+    public SalesReturnResponse createReturn(SalesReturnRequest request) {
+        CustomerOrder order = findOrderById(request.getOrderId());
+
+        if ("CANCELLED".equals(order.getStatus())) {
+            throw new RuntimeException("Cannot return items from a cancelled order");
+        }
+
+        BigDecimal totalRefund = BigDecimal.ZERO;
+
+        SalesReturn salesReturn = new SalesReturn();
+        salesReturn.setBranchId(request.getBranchId());
+        salesReturn.setOrderId(request.getOrderId());
+        salesReturn.setCustomerId(request.getCustomerId());
+        salesReturn.setReturnDate(LocalDateTime.now());
+        salesReturn.setRefundMethod(request.getRefundMethod());
+        salesReturn.setReason(request.getReason());
+        salesReturn.setProcessedBy(request.getProcessedBy());
+        salesReturn.setStatus("COMPLETED");
+
+        SalesReturn savedReturn = returnRepository.save(salesReturn);
+
+        for (SalesReturnRequest.ReturnItemDto item : request.getItems()) {
+            BigDecimal lineRefund = item.getUnitPrice()
+                    .multiply(item.getQuantity())
+                    .setScale(2, RoundingMode.HALF_UP);
+            totalRefund = totalRefund.add(lineRefund);
+
+            SalesReturnItem returnItem = new SalesReturnItem();
+            returnItem.setReturnId(savedReturn.getReturnId());
+            returnItem.setItemId(item.getItemId());
+            returnItem.setInternalBatchBarcode(item.getInternalBatchBarcode());
+            returnItem.setQuantity(item.getQuantity());
+            returnItem.setUnitPrice(item.getUnitPrice());
+            returnItem.setLineRefund(lineRefund);
+            returnItem.setCondition(item.getCondition());
+            returnItemRepository.save(returnItem);
+
+            // add stock back
+            addReturnStock(request.getBranchId(), item, savedReturn.getReturnId(), request.getProcessedBy());
+        }
+
+        savedReturn.setRefundAmount(totalRefund);
+        returnRepository.save(savedReturn);
+
+        // write cash session transaction for cash refund
+        if ("CASH".equals(request.getRefundMethod()) && order.getCashSessionId() != null) {
+            CashSessionTransaction txn = new CashSessionTransaction();
+            txn.setSessionId(order.getCashSessionId());
+            txn.setType("REFUND");
+            txn.setAmount(totalRefund);
+            txn.setPaymentMethod("CASH");
+            txn.setNote("Return for invoice: " + order.getInvoiceNo());
+            txn.setCreatedBy(request.getProcessedBy());
+            txn.setCreatedAt(LocalDateTime.now());
+            cashSessionTransactionRepository.save(txn);
+        }
+
+        return buildReturnResponse(savedReturn);
+    }
+
+    @Override
+    public SalesReturnResponse getReturnById(Long returnId) {
+        return buildReturnResponse(findReturnById(returnId));
+    }
+
+    @Override
+    public List<SalesReturnResponse> getReturnsByOrder(Long orderId) {
+        return returnRepository.findByOrderId(orderId)
+                .stream().map(this::buildReturnResponse).toList();
+    }
+
+    @Override
+    public List<SalesReturnResponse> getReturnsByBranch(Long branchId) {
+        return returnRepository.findByBranchIdOrderByReturnDateDesc(branchId)
+                .stream().map(this::buildReturnResponse).toList();
+    }
+
+    // ─── Stock deduction ─────────────────────────────────────────────────────────
+
+    private void deductStock(Long branchId, OrderProductRequest item, Long orderId, Long userId) {
+        // convert qty to base units
+        BigDecimal multiplier = itemUnitRepository
+                .findByItemIdAndUnitIdAndIsActiveTrue(item.getItemId(), item.getUnitId())
+                .orElseThrow(() -> new RuntimeException("Unit not found for item: " + item.getItemId()))
+                .getMultiplierToBase();
+
+        BigDecimal baseQty = item.getQuantity().multiply(multiplier);
+
+        // update stock total
+        Stock stock = stockRepository.findByBranchIdAndItemId(branchId, item.getItemId())
+                .orElseThrow(() -> new RuntimeException("No stock record for item: " + item.getItemId()));
+
+        if (stock.getAvailableQty().compareTo(baseQty) < 0) {
+            throw new RuntimeException("Insufficient stock for item: " + item.getItemId()
+                    + " (available: " + stock.getAvailableQty() + ", required: " + baseQty + ")");
+        }
+
+        stock.setAvailableQty(stock.getAvailableQty().subtract(baseQty));
+        stock.setLastUpdated(LocalDateTime.now());
+        stockRepository.save(stock);
+
+        // deduct from specific batch if given, otherwise from oldest batch (FIFO)
+        if (item.getBatchBarcode() != null && !item.getBatchBarcode().isBlank()) {
+            StockBatch batch = stockBatchRepository
+                    .findByBranchIdAndInternalBatchBarcode(branchId, item.getBatchBarcode())
+                    .orElseThrow(() -> new RuntimeException("Batch not found: " + item.getBatchBarcode()));
+            batch.setQtyRemaining(batch.getQtyRemaining().subtract(baseQty));
+            stockBatchRepository.save(batch);
+        } else {
+            // FIFO — deduct from oldest batches first
+            deductFIFO(branchId, item.getItemId(), baseQty);
+        }
+
+        // record stock movement
+        StockMovement movement = new StockMovement();
+        movement.setBranchId(branchId);
+        movement.setMovementType("SALE");
+        movement.setItemId(item.getItemId());
+        movement.setUnitId(item.getUnitId());
+        movement.setInternalBatchBarcode(item.getBatchBarcode());
+        movement.setQuantity(baseQty.negate());
+        movement.setUnitPrice(item.getUnitPrice());
+        movement.setRefTable("customer_orders");
+        movement.setRefId(orderId);
+        movement.setNote("Sale - Invoice deduction");
+        movement.setCreatedBy(userId);
+        movement.setCreatedAt(LocalDateTime.now());
+        stockMovementRepository.save(movement);
+    }
+
+    private void deductFIFO(Long branchId, Long itemId, BigDecimal baseQtyToDeduct) {
+        List<StockBatch> batches = stockBatchRepository
+                .findByBranchIdAndItemIdOrderByCreatedAtDesc(branchId, itemId);
+
+        // reverse to get oldest first
+        java.util.Collections.reverse(batches);
+
+        BigDecimal remaining = baseQtyToDeduct;
+        for (StockBatch batch : batches) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+            if (batch.getQtyRemaining().compareTo(BigDecimal.ZERO) <= 0) continue;
+
+            BigDecimal deduct = remaining.min(batch.getQtyRemaining());
+            batch.setQtyRemaining(batch.getQtyRemaining().subtract(deduct));
+            stockBatchRepository.save(batch);
+            remaining = remaining.subtract(deduct);
+        }
+    }
+
+    private void reverseStock(Long branchId, OrderProduct op, Long orderId, Long userId) {
+        BigDecimal multiplier = itemUnitRepository
+                .findByItemIdAndUnitIdAndIsActiveTrue(op.getItemId(), op.getUnitId())
+                .map(u -> u.getMultiplierToBase())
+                .orElse(BigDecimal.ONE);
+
+        BigDecimal baseQty = op.getQuantity().multiply(multiplier);
+
+        stockRepository.findByBranchIdAndItemId(branchId, op.getItemId()).ifPresent(stock -> {
+            stock.setAvailableQty(stock.getAvailableQty().add(baseQty));
+            stock.setLastUpdated(LocalDateTime.now());
+            stockRepository.save(stock);
+        });
+
+        if (op.getBatchBarcode() != null) {
+            stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, op.getBatchBarcode())
+                    .ifPresent(batch -> {
+                        batch.setQtyRemaining(batch.getQtyRemaining().add(baseQty));
+                        stockBatchRepository.save(batch);
+                    });
+        }
+
+        StockMovement movement = new StockMovement();
+        movement.setBranchId(branchId);
+        movement.setMovementType("SALE_CANCEL");
+        movement.setItemId(op.getItemId());
+        movement.setUnitId(op.getUnitId());
+        movement.setInternalBatchBarcode(op.getBatchBarcode());
+        movement.setQuantity(baseQty);
+        movement.setUnitPrice(op.getUnitPrice());
+        movement.setRefTable("customer_orders");
+        movement.setRefId(orderId);
+        movement.setNote("Order cancellation - stock reversed");
+        movement.setCreatedBy(userId);
+        movement.setCreatedAt(LocalDateTime.now());
+        stockMovementRepository.save(movement);
+    }
+
+    private void addReturnStock(Long branchId, SalesReturnRequest.ReturnItemDto item, Long returnId, Long userId) {
+        // only add back to stock if condition is GOOD
+        if (!"GOOD".equalsIgnoreCase(item.getCondition())) {
+            // damaged/expired — move to damaged stock
+            stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
+                stock.setDamagedQty(stock.getDamagedQty().add(item.getQuantity()));
+                stock.setLastUpdated(LocalDateTime.now());
+                stockRepository.save(stock);
+            });
+        } else {
+            stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
+                stock.setAvailableQty(stock.getAvailableQty().add(item.getQuantity()));
+                stock.setLastUpdated(LocalDateTime.now());
+                stockRepository.save(stock);
+
+                if (item.getInternalBatchBarcode() != null) {
+                    stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
+                            .ifPresent(batch -> {
+                                batch.setQtyRemaining(batch.getQtyRemaining().add(item.getQuantity()));
+                                stockBatchRepository.save(batch);
+                            });
+                }
+            });
+        }
+
+        StockMovement movement = new StockMovement();
+        movement.setBranchId(branchId);
+        movement.setMovementType("SALE_RETURN");
+        movement.setItemId(item.getItemId());
+        movement.setUnitId(1L); // base unit for returns
+        movement.setInternalBatchBarcode(item.getInternalBatchBarcode());
+        movement.setQuantity(item.getQuantity());
+        movement.setUnitPrice(item.getUnitPrice());
+        movement.setRefTable("sales_returns");
+        movement.setRefId(returnId);
+        movement.setNote("Return - condition: " + item.getCondition());
+        movement.setCreatedBy(userId);
+        movement.setCreatedAt(LocalDateTime.now());
+        stockMovementRepository.save(movement);
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+    private String generateInvoiceNo(Long branchId) {
+        String prefix = "INV-" + branchId + "-";
+        String datePart = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        String invoiceNo = prefix + datePart + "-" + uniquePart;
+
+        // ensure uniqueness
+        while (orderRepository.existsByInvoiceNo(invoiceNo)) {
+            uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+            invoiceNo = prefix + datePart + "-" + uniquePart;
+        }
+        return invoiceNo;
+    }
+
+    private void recordStatusHistory(Long orderId, String oldStatus, String newStatus, Long changedBy, String note) {
+        OrderStatusHistory history = new OrderStatusHistory();
+        history.setOrderId(orderId);
+        history.setOldStatus(oldStatus);
+        history.setNewStatus(newStatus);
+        history.setChangedBy(changedBy);
+        history.setNote(note);
+        history.setChangedAt(LocalDateTime.now());
+        statusHistoryRepository.save(history);
+    }
+
+    private CustomerOrder findOrderById(Long orderId) {
+        return orderRepository.findById(orderId)
+                .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
+    }
+
+    private SalesReturn findReturnById(Long returnId) {
+        return returnRepository.findById(returnId)
+                .orElseThrow(() -> new RuntimeException("Return not found: " + returnId));
+    }
+
+    private BigDecimal nvl(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    // ─── Mappers ─────────────────────────────────────────────────────────────────
+
+    private OrderResponse buildOrderResponse(CustomerOrder order) {
+        List<OrderProductResponse> items = orderProductRepository.findByOrderId(order.getOrderId())
+                .stream().map(this::mapOrderProduct).toList();
+
+        List<PaymentResponse> payments = paymentRepository.findByOrderId(order.getOrderId())
+                .stream().map(this::mapPayment).toList();
+
+        return OrderResponse.builder()
+                .orderId(order.getOrderId())
+                .branchId(order.getBranchId())
+                .invoiceNo(order.getInvoiceNo())
+                .userId(order.getUserId())
+                .customerId(order.getCustomerId())
+                .cashSessionId(order.getCashSessionId())
+                .subtotal(order.getSubtotal())
+                .discount(order.getDiscount())
+                .taxAmount(order.getTaxAmount())
+                .rounding(order.getRounding())
+                .total(order.getTotal())
+                .paymentStatus(order.getPaymentStatus())
+                .status(order.getStatus())
+                .orderDate(order.getOrderDate())
+                .notes(order.getNotes())
+                .items(items)
+                .payments(payments)
+                .build();
+    }
+
+    private OrderProductResponse mapOrderProduct(OrderProduct op) {
+        String itemName = itemRepository.findById(op.getItemId())
+                .map(i -> i.getName()).orElse(null);
+        String unitName = itemUnitRepository.findByUnitIdAndIsActiveTrue(op.getUnitId())
+                .map(u -> u.getUnitName()).orElse(null);
+
+        return OrderProductResponse.builder()
+                .orderProductId(op.getOrderProductId())
+                .orderId(op.getOrderId())
+                .itemId(op.getItemId())
+                .itemName(itemName)
+                .unitId(op.getUnitId())
+                .unitName(unitName)
+                .batchBarcode(op.getBatchBarcode())
+                .quantity(op.getQuantity())
+                .unitPrice(op.getUnitPrice())
+                .discount(op.getDiscount())
+                .lineTotal(op.getLineTotal())
+                .createdAt(op.getCreatedAt())
+                .build();
+    }
+
+    private PaymentResponse mapPayment(Payment p) {
+        return PaymentResponse.builder()
+                .paymentId(p.getPaymentId())
+                .orderId(p.getOrderId())
+                .cashSessionId(p.getCashSessionId())
+                .amount(p.getAmount())
+                .tenderedAmount(p.getTenderedAmount())
+                .changeAmount(p.getChangeAmount())
+                .paymentMethod(p.getPaymentMethod())
+                .paymentDate(p.getPaymentDate())
+                .receivedBy(p.getReceivedBy())
+                .referenceNo(p.getReferenceNo())
+                .note(p.getNote())
+                .build();
+    }
+
+    private SalesReturnResponse buildReturnResponse(SalesReturn r) {
+        String invoiceNo = orderRepository.findById(r.getOrderId())
+                .map(CustomerOrder::getInvoiceNo).orElse(null);
+
+        List<SalesReturnResponse.ReturnItemResponse> items = returnItemRepository.findByReturnId(r.getReturnId())
+                .stream().map(ri -> {
+                    String itemName = itemRepository.findById(ri.getItemId())
+                            .map(i -> i.getName()).orElse(null);
+                    return SalesReturnResponse.ReturnItemResponse.builder()
+                            .returnItemId(ri.getReturnItemId())
+                            .itemId(ri.getItemId())
+                            .itemName(itemName)
+                            .internalBatchBarcode(ri.getInternalBatchBarcode())
+                            .quantity(ri.getQuantity())
+                            .unitPrice(ri.getUnitPrice())
+                            .lineRefund(ri.getLineRefund())
+                            .condition(ri.getCondition())
+                            .build();
+                }).toList();
+
+        return SalesReturnResponse.builder()
+                .returnId(r.getReturnId())
+                .orderId(r.getOrderId())
+                .invoiceNo(invoiceNo)
+                .branchId(r.getBranchId())
+                .customerId(r.getCustomerId())
+                .returnDate(r.getReturnDate())
+                .refundMethod(r.getRefundMethod())
+                .refundAmount(r.getRefundAmount())
+                .reason(r.getReason())
+                .processedBy(r.getProcessedBy())
+                .status(r.getStatus())
+                .items(items)
+                .build();
+    }
+}
