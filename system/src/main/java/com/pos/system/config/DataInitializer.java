@@ -4,12 +4,19 @@ import com.pos.system.model.auth.Authorization;
 import com.pos.system.model.auth.AuthorizationStatus;
 import com.pos.system.model.auth.AuthorizationType;
 import com.pos.system.model.auth.User;
+import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.stock.Stock;
 import com.pos.system.repository.AuthorizationRepository;
+import com.pos.system.repository.ItemUnitRepository;
+import com.pos.system.repository.StockRepository;
 import com.pos.system.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
+
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Component
 @RequiredArgsConstructor
@@ -17,6 +24,8 @@ public class DataInitializer implements CommandLineRunner {
 
     private final AuthorizationRepository authorizationRepository;
     private final UserRepository userRepository;
+    private final StockRepository stockRepository;
+    private final ItemUnitRepository itemUnitRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -41,6 +50,28 @@ public class DataInitializer implements CommandLineRunner {
             userRepository.save(superAdminUser);
 
             System.out.println("Default SUPERADMIN created: superadmin / superadmin123");
+        }
+
+        // Migrate existing stocks to set unitId if null
+        migrateStockUnitIds();
+    }
+
+    private void migrateStockUnitIds() {
+        List<Stock> stocksWithoutUnitId = stockRepository.findAll().stream()
+                .filter(stock -> stock.getUnitId() == null)
+                .collect(Collectors.toList());
+
+        if (!stocksWithoutUnitId.isEmpty()) {
+            System.out.println("Migrating " + stocksWithoutUnitId.size() + " stock records to set unitId...");
+
+            for (Stock stock : stocksWithoutUnitId) {
+                ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(stock.getItemId())
+                        .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + stock.getItemId()));
+                stock.setUnitId(baseUnit.getUnitId());
+                stockRepository.save(stock);
+            }
+
+            System.out.println("Stock migration completed.");
         }
     }
 }

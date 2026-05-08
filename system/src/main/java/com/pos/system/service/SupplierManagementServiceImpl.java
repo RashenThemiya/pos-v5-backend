@@ -743,11 +743,15 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     // =========================
 
     private void addPurchasedStock(Supply supply, SupplyProduct product) {
+        ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(product.getItemId())
+                .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + product.getItemId()));
+
         Stock stock = stockRepository.findByBranchIdAndItemId(supply.getBranchId(), product.getItemId())
                 .orElseGet(() -> {
                     Stock s = new Stock();
                     s.setBranchId(supply.getBranchId());
                     s.setItemId(product.getItemId());
+                    s.setUnitId(baseUnit.getUnitId());
                     s.setAvailableQty(BigDecimal.ZERO);
                     s.setDamagedQty(BigDecimal.ZERO);
                     s.setExpiredQty(BigDecimal.ZERO);

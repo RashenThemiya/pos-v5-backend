@@ -12,6 +12,7 @@ public class StockResponseDto {
     private Long stockId;
     private Long branchId;
     private Long itemId;
+    private Long unitId;
     private BigDecimal availableQty;
     private BigDecimal damagedQty;
     private BigDecimal expiredQty;

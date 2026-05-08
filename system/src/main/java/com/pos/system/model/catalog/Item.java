@@ -5,6 +5,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
@@ -35,6 +36,14 @@ public class Item {
 
     @Column(nullable = false)
     private Boolean isWeighed = false;
+
+    // ===== NEW STOCK CONTROL =====
+    @Column(precision = 12, scale = 3)
+    private BigDecimal minStock;   // reorder level
+
+    @Column(precision = 12, scale = 3)
+    private BigDecimal maxStock;   // max allowed stock
+
 
     // optional: only for items sold through scale barcode flow
     private String scaleBarcodePrefix;

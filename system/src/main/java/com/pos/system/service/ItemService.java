@@ -289,6 +289,22 @@ public class ItemService {
             throw new RuntimeException("SKU already exists in this branch: " + request.getSku());
         }
 
+        if (request.getMinStock() != null &&
+                request.getMinStock().compareTo(BigDecimal.ZERO) < 0) {
+            throw new RuntimeException("Minimum stock must be >= 0");
+        }
+
+        if (request.getMaxStock() != null &&
+                request.getMaxStock().compareTo(BigDecimal.ZERO) < 0) {
+            throw new RuntimeException("Maximum stock must be >= 0");
+        }
+
+        if (request.getMinStock() != null &&
+                request.getMaxStock() != null &&
+                request.getMinStock().compareTo(request.getMaxStock()) > 0) {
+            throw new RuntimeException("Minimum stock cannot be greater than maximum stock");
+        }
+
         if (request.getCategoryId() != null) {
             categoryRepository.findByCategoryIdAndBranchId(request.getCategoryId(), request.getBranchId())
                     .orElseThrow(() -> new RuntimeException("Category not found in this branch"));
@@ -360,6 +376,8 @@ public class ItemService {
         item.setIsWeighed(request.getIsWeighed() != null ? request.getIsWeighed() : false);
         item.setScaleBarcodePrefix(request.getScaleBarcodePrefix());
         item.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
+        item.setMinStock(request.getMinStock());
+        item.setMaxStock(request.getMaxStock());
     }
 
     private ItemUnitRequest buildBaseUnitRequest(ItemRequest request) {
@@ -474,6 +492,8 @@ public class ItemService {
         response.setIsWeighed(item.getIsWeighed());
         response.setScaleBarcodePrefix(item.getScaleBarcodePrefix());
         response.setIsActive(item.getIsActive());
+        response.setMinStock(item.getMinStock());
+        response.setMaxStock(item.getMaxStock());
         response.setCreatedAt(item.getCreatedAt());
         response.setUpdatedAt(item.getUpdatedAt());
 

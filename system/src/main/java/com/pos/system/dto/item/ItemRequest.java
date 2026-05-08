@@ -1,5 +1,7 @@
 package com.pos.system.dto.item;
 
+import java.math.BigDecimal;
+
 import org.springframework.web.multipart.MultipartFile;
 
 import lombok.Data;
@@ -24,4 +26,6 @@ public class ItemRequest {
     private String scaleItemCode;
     private Boolean autoGenerateBarcode;
       private MultipartFile imageFile;
+      private BigDecimal minStock;
+private BigDecimal maxStock;
 }

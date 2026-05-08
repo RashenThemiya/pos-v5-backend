@@ -27,6 +27,11 @@ public class Stock {
     @Column(nullable = false)
     private Long itemId;
 
+    @Column(nullable = false)
+    private Long unitId;
+
+    
+
     // always stored in base unit
     @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal availableQty = BigDecimal.ZERO;

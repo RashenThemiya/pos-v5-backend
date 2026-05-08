@@ -91,11 +91,15 @@ public class StockServiceImpl implements StockService {
             BigDecimal qty = nvlQty(itemDto.getQuantity());
             BigDecimal qtyBase = unitConversionService.toBaseQty(itemDto.getItemId(), itemDto.getUnitId(), qty);
 
+            ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
+                    .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
+
             Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setUnitId(baseUnit.getUnitId());
                         s.setAvailableQty(BigDecimal.ZERO);
                         s.setDamagedQty(BigDecimal.ZERO);
                         s.setExpiredQty(BigDecimal.ZERO);
@@ -188,11 +192,15 @@ public class StockServiceImpl implements StockService {
             fromStock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(fromStock);
 
+            ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
+                    .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
+
             Stock toStock = stockRepository.findByBranchIdAndItemId(dto.getToBranchId(), itemDto.getItemId())
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getToBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setUnitId(baseUnit.getUnitId());
                         s.setAvailableQty(BigDecimal.ZERO);
                         s.setDamagedQty(BigDecimal.ZERO);
                         s.setExpiredQty(BigDecimal.ZERO);
@@ -306,11 +314,15 @@ public class StockServiceImpl implements StockService {
         StockCount savedCount = stockCountRepository.save(count);
 
         for (StockCountItemRequestDto itemDto : dto.getItems()) {
+            ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
+                    .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
+
             Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setUnitId(baseUnit.getUnitId());
                         s.setAvailableQty(BigDecimal.ZERO);
                         s.setDamagedQty(BigDecimal.ZERO);
                         s.setExpiredQty(BigDecimal.ZERO);
@@ -407,6 +419,7 @@ public class StockServiceImpl implements StockService {
                 .stockId(stock.getStockId())
                 .branchId(stock.getBranchId())
                 .itemId(stock.getItemId())
+                .unitId(stock.getUnitId())
                 .availableQty(stock.getAvailableQty())
                 .damagedQty(stock.getDamagedQty())
                 .expiredQty(stock.getExpiredQty())
