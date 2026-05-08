@@ -173,7 +173,7 @@ public class CustomerController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_VIEW')")
-    @GetMapping("/page")
+    @GetMapping("/getAllCustomers")
     public Page<Customer> getAllCustomers(Pageable pageable) {
         return customerService.getAll(pageable);
     }
