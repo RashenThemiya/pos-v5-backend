@@ -8,4 +8,8 @@ import java.util.List;
 public interface CustomerBalanceTransactionRepository extends JpaRepository<CustomerBalanceTransaction, Long> {
     List<CustomerBalanceTransaction> findByCustomerIdOrderByCreatedAtDesc(Long customerId);
     List<CustomerBalanceTransaction> findByBranchIdAndCustomerIdOrderByCreatedAtDesc(Long branchId, Long customerId);
+    List<CustomerBalanceTransaction> findByCustomerId(Long customerId);
+    List<CustomerBalanceTransaction> findByCustomerIdAndType(Long customerId, String type);
+    List<CustomerBalanceTransaction> findByBranchId(Long branchId);
+    
 }

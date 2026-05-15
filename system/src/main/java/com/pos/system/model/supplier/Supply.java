@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "supplies")
 public class Supply {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long supplyId;
@@ -32,14 +33,50 @@ public class Supply {
     @Column(length = 50)
     private String invoiceNo;
 
-    private BigDecimal subtotal;
-    private BigDecimal discount;
+    // =========================
+    // AMOUNTS
+    // =========================
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal subtotal = BigDecimal.ZERO;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal discount = BigDecimal.ZERO;
+
+    @Column(precision = 14, scale = 2)
     private BigDecimal taxAmount = BigDecimal.ZERO;
+
+    @Column(precision = 14, scale = 2)
     private BigDecimal rounding = BigDecimal.ZERO;
-    private BigDecimal total;
-    private BigDecimal paidAmount;
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal total = BigDecimal.ZERO;
+
+    // =========================
+    // PAYMENT TRACKING (🔥 IMPORTANT)
+    // =========================
+
+    @Column(precision = 14, scale = 2)
+    private BigDecimal paidAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal payableAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal balanceAmount = BigDecimal.ZERO;
+
+    @Column(nullable = false, length = 30)
+    private String paymentStatus = "UNPAID";
+    // UNPAID | PARTIAL | PAID
+
     private String paymentMethod;
-    private String status;
+
+    // =========================
+    // STATUS
+    // =========================
+
+    private String status; // COMPLETED / PENDING
+
     private LocalDateTime supplyDate;
 
     @Column(nullable = false)

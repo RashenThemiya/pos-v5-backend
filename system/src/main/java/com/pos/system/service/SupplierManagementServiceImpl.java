@@ -1,6 +1,8 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.supplier.*;
+import com.pos.system.model.cash.CashSession;
+import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.stock.Stock;
@@ -8,7 +10,6 @@ import com.pos.system.model.stock.StockBatch;
 import com.pos.system.model.stock.StockMovement;
 import com.pos.system.model.supplier.*;
 import com.pos.system.repository.*;
-import com.pos.system.service.UnitConversionService;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -26,6 +27,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Transactional
 public class SupplierManagementServiceImpl implements SupplierManagementService {
+
+    private static final Long SYSTEM_USER_ID = 1L;
 
     private final SupplierRepository supplierRepository;
     private final SupplierItemRepository supplierItemRepository;
@@ -46,6 +49,12 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final UnitConversionService unitConversionService;
+
+    private final CashSessionRepository cashSessionRepository;
+    private final CashSessionTransactionRepository cashSessionTransactionRepository;
+
+    private final PurchaseReturnRepository purchaseReturnRepository;
+private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
     // =========================
     // SUPPLIER
@@ -91,7 +100,6 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         }
 
         supplier.setUpdatedAt(LocalDateTime.now());
-
         return mapSupplier(supplierRepository.save(supplier));
     }
 
@@ -117,7 +125,6 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     @Override
     public SupplierItemResponseDto addSupplierItem(SupplierItemRequestDto dto) {
-
         Supplier supplier = supplierRepository.findById(dto.getSupplierId())
                 .orElseThrow(() -> new RuntimeException("Supplier not found"));
 
@@ -155,7 +162,6 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     @Override
     public SupplierItemResponseDto updateSupplierItem(Long supplierItemId, SupplierItemRequestDto dto) {
-
         SupplierItem supplierItem = supplierItemRepository.findById(supplierItemId)
                 .orElseThrow(() -> new RuntimeException("Supplier item not found"));
 
@@ -184,7 +190,6 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         }
 
         supplierItem.setUpdatedAt(LocalDateTime.now());
-
         return mapSupplierItem(supplierItemRepository.save(supplierItem));
     }
 
@@ -213,7 +218,6 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
         supplierItem.setIsActive(false);
         supplierItem.setUpdatedAt(LocalDateTime.now());
-
         supplierItemRepository.save(supplierItem);
     }
 
@@ -223,10 +227,12 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     @Override
     public PurchaseOrderResponseDto createPurchaseOrder(PurchaseOrderRequestDto dto) {
-        purchaseOrderRepository.findByPoNo(dto.getPoNo())
-                .ifPresent(x -> {
-                    throw new RuntimeException("PO number already exists");
-                });
+        if (dto.getPoNo() != null && !dto.getPoNo().isBlank()) {
+            purchaseOrderRepository.findByPoNo(dto.getPoNo())
+                    .ifPresent(x -> {
+                        throw new RuntimeException("PO number already exists");
+                    });
+        }
 
         Supplier supplier = supplierRepository.findById(dto.getSupplierId())
                 .orElseThrow(() -> new RuntimeException("Supplier not found"));
@@ -244,10 +250,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         PurchaseOrder po = new PurchaseOrder();
         po.setBranchId(dto.getBranchId());
         po.setSupplierId(dto.getSupplierId());
-        po.setPoNo(dto.getPoNo());
+        po.setPoNo(resolvePoNo(dto.getPoNo()));
         po.setStatus(dto.getStatus() != null ? dto.getStatus() : "PENDING");
         po.setExpectedDate(dto.getExpectedDate());
-        po.setCreatedBy(dto.getCreatedBy());
+        po.setCreatedBy(resolveUserId(dto.getCreatedBy()));
         po.setCreatedAt(LocalDateTime.now());
         po.setNote(dto.getNote());
 
@@ -269,7 +275,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             item.setUnitId(itemDto.getUnitId());
             item.setOrderedQty(nvlQty(itemDto.getOrderedQty()));
             item.setReceivedQty(BigDecimal.ZERO);
-            item.setUnitCostEst(itemDto.getUnitCostEst());
+            item.setUnitCostEst(nvlMoney(itemDto.getUnitCostEst()));
 
             purchaseOrderItemRepository.save(item);
         }
@@ -343,29 +349,33 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
         validateDuplicateSupplyLines(dto.getProducts());
 
+        Long receivedBy = resolveUserId(dto.getReceivedBy());
         String status = dto.getStatus() != null ? dto.getStatus() : "COMPLETED";
 
         Supply supply = new Supply();
         supply.setBranchId(dto.getBranchId());
         supply.setSupplierId(dto.getSupplierId());
         supply.setPoId(dto.getPoId());
-        supply.setGrnNo(dto.getGrnNo());
+        supply.setGrnNo(resolveGrnNo(dto.getGrnNo()));
         supply.setInvoiceNo(dto.getInvoiceNo());
-        supply.setSubtotal(dto.getSubtotal());
-        supply.setDiscount(dto.getDiscount());
+        supply.setSubtotal(BigDecimal.ZERO);
+        supply.setDiscount(nvlMoney(dto.getDiscount()));
         supply.setTaxAmount(nvlMoney(dto.getTaxAmount()));
         supply.setRounding(nvlMoney(dto.getRounding()));
-        supply.setTotal(dto.getTotal());
+        supply.setTotal(BigDecimal.ZERO);
         supply.setPaidAmount(nvlMoney(dto.getPaidAmount()));
-        supply.setPaymentMethod(dto.getPaymentMethod());
+        supply.setPayableAmount(BigDecimal.ZERO);
+        supply.setBalanceAmount(BigDecimal.ZERO);
+        supply.setPaymentStatus("UNPAID");
+        supply.setPaymentMethod(dto.getPaymentMethod() != null ? dto.getPaymentMethod() : "CREDIT");
         supply.setStatus(status);
         supply.setSupplyDate(dto.getSupplyDate() != null ? dto.getSupplyDate() : LocalDateTime.now());
-        supply.setReceivedBy(dto.getReceivedBy());
+        supply.setReceivedBy(receivedBy);
         supply.setNotes(dto.getNotes());
 
         Supply savedSupply = supplyRepository.save(supply);
 
-        BigDecimal calculatedTotal = BigDecimal.ZERO;
+        BigDecimal calculatedSubtotal = BigDecimal.ZERO;
 
         for (SupplyProductRequestDto p : dto.getProducts()) {
             validateItemAndUnit(dto.getBranchId(), p.getItemId(), p.getUnitId());
@@ -379,6 +389,8 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
             BigDecimal qtyReceived = nvlQty(p.getQuantityReceived());
             BigDecimal qtyBase = unitConversionService.toBaseQty(p.getItemId(), p.getUnitId(), qtyReceived);
+            BigDecimal costPrice = nvlMoney(p.getCostPrice());
+            BigDecimal lineTotal = p.getLineTotal() != null ? p.getLineTotal() : costPrice.multiply(qtyReceived);
 
             SupplyProduct product = new SupplyProduct();
             product.setSupplyId(savedSupply.getSupplyId());
@@ -388,7 +400,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             product.setSupplierBatchBarcode(p.getSupplierBatchBarcode());
             product.setProductBarcode(resolveProductBarcode(dto.getBranchId(), p.getItemId(), p.getUnitId(), p.getProductBarcode()));
             product.setInternalBatchBarcode(generateUniqueInternalBatchBarcode(dto.getBranchId(), p.getItemId()));
-            product.setCostPrice(nvlMoney(p.getCostPrice()));
+            product.setCostPrice(costPrice);
             product.setSellingPrice(nvlMoney(p.getSellingPrice()));
             product.setQuantityReceived(qtyReceived);
             product.setQuantityReceivedBase(qtyBase);
@@ -396,14 +408,11 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             product.setQtyDamaged(nvlQty(p.getQtyDamaged()));
             product.setQtyExpired(nvlQty(p.getQtyExpired()));
             product.setExpiryDate(p.getExpiryDate());
-            product.setLineTotal(p.getLineTotal());
+            product.setLineTotal(lineTotal);
             product.setCreatedAt(LocalDateTime.now());
 
             SupplyProduct savedProduct = supplyProductRepository.save(product);
-
-            if (p.getLineTotal() != null) {
-                calculatedTotal = calculatedTotal.add(p.getLineTotal());
-            }
+            calculatedSubtotal = calculatedSubtotal.add(lineTotal);
 
             if ("COMPLETED".equalsIgnoreCase(status)) {
                 addPurchasedStock(savedSupply, savedProduct);
@@ -418,15 +427,33 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             }
         }
 
-        BigDecimal finalTotal = dto.getTotal() != null ? dto.getTotal() : calculatedTotal;
+        BigDecimal discount = nvlMoney(dto.getDiscount());
+        BigDecimal taxAmount = nvlMoney(dto.getTaxAmount());
+        BigDecimal rounding = nvlMoney(dto.getRounding());
+
+        BigDecimal finalTotal = dto.getTotal() != null
+                ? dto.getTotal()
+                : calculatedSubtotal.subtract(discount).add(taxAmount).add(rounding);
+
         BigDecimal paidAmount = nvlMoney(dto.getPaidAmount());
-        BigDecimal balanceIncrease = finalTotal.subtract(paidAmount);
+        BigDecimal payableAmount = finalTotal;
+        BigDecimal balanceAmount = payableAmount.subtract(paidAmount);
 
-        supply.setTotal(finalTotal);
-        supplyRepository.save(supply);
+        if (balanceAmount.compareTo(BigDecimal.ZERO) < 0) {
+            throw new RuntimeException("Paid amount cannot exceed total");
+        }
 
-        if ("COMPLETED".equalsIgnoreCase(status) && balanceIncrease.compareTo(BigDecimal.ZERO) > 0) {
-            supplier.setBalance(nvlMoney(supplier.getBalance()).add(balanceIncrease));
+        savedSupply.setSubtotal(calculatedSubtotal);
+        savedSupply.setTotal(finalTotal);
+        savedSupply.setPayableAmount(payableAmount);
+        savedSupply.setPaidAmount(paidAmount);
+        savedSupply.setBalanceAmount(balanceAmount);
+        savedSupply.setPaymentStatus(resolvePaymentStatus(payableAmount, paidAmount));
+
+        supplyRepository.save(savedSupply);
+
+        if ("COMPLETED".equalsIgnoreCase(status) && balanceAmount.compareTo(BigDecimal.ZERO) > 0) {
+            supplier.setBalance(nvlMoney(supplier.getBalance()).add(balanceAmount));
             supplier.setUpdatedAt(LocalDateTime.now());
             supplierRepository.save(supplier);
 
@@ -434,11 +461,11 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             txn.setBranchId(dto.getBranchId());
             txn.setSupplierId(dto.getSupplierId());
             txn.setType("SUPPLY_CREDIT");
-            txn.setAmount(balanceIncrease);
+            txn.setAmount(balanceAmount);
             txn.setRefTable("supplies");
             txn.setRefId(savedSupply.getSupplyId());
             txn.setNote("Balance added from completed supply");
-            txn.setCreatedBy(dto.getReceivedBy());
+            txn.setCreatedBy(receivedBy);
             txn.setCreatedAt(LocalDateTime.now());
             supplierBalanceTransactionRepository.save(txn);
         }
@@ -488,6 +515,9 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .rounding(supply.getRounding())
                 .total(supply.getTotal())
                 .paidAmount(supply.getPaidAmount())
+                .payableAmount(supply.getPayableAmount())
+                .balanceAmount(supply.getBalanceAmount())
+                .paymentStatus(supply.getPaymentStatus())
                 .paymentMethod(supply.getPaymentMethod())
                 .status(supply.getStatus())
                 .supplyDate(supply.getSupplyDate())
@@ -500,6 +530,28 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     @Override
     public List<SupplyResponseDto> getSuppliesByBranch(Long branchId) {
         return supplyRepository.findByBranchId(branchId)
+                .stream()
+                .map(s -> getSupplyById(s.getSupplyId()))
+                .toList();
+    }
+
+    @Override
+    public List<SupplyResponseDto> getUnpaidSuppliesByBranch(Long branchId) {
+        return supplyRepository
+                .findByBranchIdAndPaymentStatusNotOrderBySupplyDateDesc(branchId, "PAID")
+                .stream()
+                .map(s -> getSupplyById(s.getSupplyId()))
+                .toList();
+    }
+
+    @Override
+    public List<SupplyResponseDto> getUnpaidSuppliesBySupplier(Long branchId, Long supplierId) {
+        return supplyRepository
+                .findByBranchIdAndSupplierIdAndPaymentStatusNotOrderBySupplyDateDesc(
+                        branchId,
+                        supplierId,
+                        "PAID"
+                )
                 .stream()
                 .map(s -> getSupplyById(s.getSupplyId()))
                 .toList();
@@ -518,21 +570,85 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
             throw new RuntimeException("Supplier does not belong to this branch");
         }
 
+        if (dto.getAmount() == null || dto.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Payment amount must be greater than zero");
+        }
+
+        String paymentMethod = dto.getPaymentMethod() != null
+                ? dto.getPaymentMethod().trim().toUpperCase()
+                : "CASH";
+
+        Long paidBy = resolveUserId(dto.getPaidBy());
+        Long cashSessionId = null;
+
+        if (requiresCashSession(paymentMethod)) {
+            if (dto.getCashSessionId() == null) {
+                throw new RuntimeException("Cash session is required for " + paymentMethod + " payment");
+            }
+
+            CashSession cashSession = cashSessionRepository.findById(dto.getCashSessionId())
+                    .orElseThrow(() -> new RuntimeException("Cash session not found"));
+
+            if (!"OPEN".equalsIgnoreCase(cashSession.getStatus())) {
+                throw new RuntimeException("Cash session is not OPEN");
+            }
+
+            cashSessionId = cashSession.getSessionId();
+        }
+
+        if (dto.getSupplyId() != null) {
+            Supply supply = supplyRepository.findById(dto.getSupplyId())
+                    .orElseThrow(() -> new RuntimeException("Supply not found"));
+
+            if (!supply.getBranchId().equals(dto.getBranchId())) {
+                throw new RuntimeException("Supply does not belong to this branch");
+            }
+
+            if (!supply.getSupplierId().equals(dto.getSupplierId())) {
+                throw new RuntimeException("Supply does not belong to this supplier");
+            }
+
+            BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(dto.getAmount());
+            BigDecimal total = nvlMoney(supply.getTotal());
+
+            if (newPaid.compareTo(total) > 0) {
+                throw new RuntimeException("Payment amount exceeds supply balance");
+            }
+        }
+
         SupplierPayment payment = new SupplierPayment();
         payment.setBranchId(dto.getBranchId());
         payment.setSupplierId(dto.getSupplierId());
         payment.setSupplyId(dto.getSupplyId());
         payment.setAmount(nvlMoney(dto.getAmount()));
-        payment.setPaymentMethod(dto.getPaymentMethod());
+        payment.setPaymentMethod(paymentMethod);
         payment.setPaymentDate(dto.getPaymentDate() != null ? dto.getPaymentDate() : LocalDateTime.now());
-        payment.setPaidBy(dto.getPaidBy());
-        payment.setCashSessionId(dto.getCashSessionId());
+        payment.setPaidBy(paidBy);
+        payment.setCashSessionId(cashSessionId);
         payment.setReferenceNo(dto.getReferenceNo());
         payment.setNote(dto.getNote());
 
         SupplierPayment savedPayment = supplierPaymentRepository.save(payment);
 
+        if (dto.getSupplyId() != null) {
+            Supply supply = supplyRepository.findById(dto.getSupplyId())
+                    .orElseThrow(() -> new RuntimeException("Supply not found"));
+
+            BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(payment.getAmount());
+            BigDecimal total = nvlMoney(supply.getTotal());
+            BigDecimal balance = total.subtract(newPaid);
+
+            supply.setPaidAmount(newPaid);
+            supply.setBalanceAmount(balance);
+            supply.setPaymentStatus(resolvePaymentStatus(total, newPaid));
+
+            supplyRepository.save(supply);
+        }
+
         supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(payment.getAmount()));
+        if (supplier.getBalance().compareTo(BigDecimal.ZERO) < 0) {
+            supplier.setBalance(BigDecimal.ZERO);
+        }
         supplier.setUpdatedAt(LocalDateTime.now());
         supplierRepository.save(supplier);
 
@@ -543,24 +659,83 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         txn.setAmount(payment.getAmount());
         txn.setRefTable("supplier_payments");
         txn.setRefId(savedPayment.getSupplierPaymentId());
-        txn.setNote("Supplier payment recorded");
-        txn.setCreatedBy(dto.getPaidBy());
+        txn.setNote("Supplier payment recorded by " + paymentMethod);
+        txn.setCreatedBy(paidBy);
         txn.setCreatedAt(LocalDateTime.now());
         supplierBalanceTransactionRepository.save(txn);
 
-        return SupplierPaymentResponseDto.builder()
-                .supplierPaymentId(savedPayment.getSupplierPaymentId())
-                .branchId(savedPayment.getBranchId())
-                .supplierId(savedPayment.getSupplierId())
-                .supplyId(savedPayment.getSupplyId())
-                .amount(savedPayment.getAmount())
-                .paymentMethod(savedPayment.getPaymentMethod())
-                .paymentDate(savedPayment.getPaymentDate())
-                .paidBy(savedPayment.getPaidBy())
-                .cashSessionId(savedPayment.getCashSessionId())
-                .referenceNo(savedPayment.getReferenceNo())
-                .note(savedPayment.getNote())
-                .build();
+        if (requiresCashSession(paymentMethod)) {
+            CashSessionTransaction cashTxn = new CashSessionTransaction();
+            cashTxn.setSessionId(cashSessionId);
+            cashTxn.setType("SUPPLIER_PAYMENT_OUT");
+            cashTxn.setAmount(payment.getAmount());
+            cashTxn.setPaymentMethod(paymentMethod);
+            cashTxn.setSupplierPaymentId(savedPayment.getSupplierPaymentId());
+            cashTxn.setNote("Supplier payment: " + supplier.getName());
+            cashTxn.setCreatedBy(paidBy);
+            cashTxn.setCreatedAt(LocalDateTime.now());
+
+            cashSessionTransactionRepository.save(cashTxn);
+        }
+
+        return mapSupplierPayment(savedPayment);
+    }
+
+    @Override
+    public SupplierPaymentResponseDto getSupplierPaymentById(Long paymentId) {
+        SupplierPayment payment = supplierPaymentRepository.findById(paymentId)
+                .orElseThrow(() -> new RuntimeException("Payment not found"));
+
+        return mapSupplierPayment(payment);
+    }
+
+    @Override
+    public List<SupplierPaymentResponseDto> getPaymentsByBranch(Long branchId) {
+        return supplierPaymentRepository.findByBranchIdOrderByPaymentDateDesc(branchId)
+                .stream()
+                .map(this::mapSupplierPayment)
+                .toList();
+    }
+
+    @Override
+    public List<SupplierPaymentResponseDto> getPaymentsBySupplier(Long branchId, Long supplierId) {
+        return supplierPaymentRepository
+                .findByBranchIdAndSupplierIdOrderByPaymentDateDesc(branchId, supplierId)
+                .stream()
+                .map(this::mapSupplierPayment)
+                .toList();
+    }
+
+    @Override
+    public List<SupplierPaymentResponseDto> getPaymentsBySupply(Long supplyId) {
+        return supplierPaymentRepository.findBySupplyIdOrderByPaymentDateDesc(supplyId)
+                .stream()
+                .map(this::mapSupplierPayment)
+                .toList();
+    }
+
+    // =========================
+    // SUPPLIER LEDGER
+    // =========================
+
+    @Override
+    public List<SupplierBalanceTransactionResponseDto> getSupplierLedger(Long branchId, Long supplierId) {
+        return supplierBalanceTransactionRepository
+                .findByBranchIdAndSupplierIdOrderByCreatedAtDesc(branchId, supplierId)
+                .stream()
+                .map(txn -> SupplierBalanceTransactionResponseDto.builder()
+                        .txnId(txn.getTxnId())
+                        .branchId(txn.getBranchId())
+                        .supplierId(txn.getSupplierId())
+                        .type(txn.getType())
+                        .amount(txn.getAmount())
+                        .refTable(txn.getRefTable())
+                        .refId(txn.getRefId())
+                        .note(txn.getNote())
+                        .createdBy(txn.getCreatedBy())
+                        .createdAt(txn.getCreatedAt())
+                        .build())
+                .toList();
     }
 
     // =========================
@@ -568,11 +743,15 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     // =========================
 
     private void addPurchasedStock(Supply supply, SupplyProduct product) {
+        ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(product.getItemId())
+                .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + product.getItemId()));
+
         Stock stock = stockRepository.findByBranchIdAndItemId(supply.getBranchId(), product.getItemId())
                 .orElseGet(() -> {
                     Stock s = new Stock();
                     s.setBranchId(supply.getBranchId());
                     s.setItemId(product.getItemId());
+                    s.setUnitId(baseUnit.getUnitId());
                     s.setAvailableQty(BigDecimal.ZERO);
                     s.setDamagedQty(BigDecimal.ZERO);
                     s.setExpiredQty(BigDecimal.ZERO);
@@ -619,7 +798,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         movement.setRefTable("supplies");
         movement.setRefId(supply.getSupplyId());
         movement.setNote("Stock added from completed supply");
-        movement.setCreatedBy(supply.getReceivedBy());
+        movement.setCreatedBy(resolveUserId(supply.getReceivedBy()));
         movement.setCreatedAt(LocalDateTime.now());
 
         stockMovementRepository.save(movement);
@@ -755,6 +934,288 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     }
 
     // =========================
+    // PAYMENT HELPERS
+    // =========================
+
+    private boolean requiresCashSession(String paymentMethod) {
+        if (paymentMethod == null) return false;
+
+        return paymentMethod.equalsIgnoreCase("CASH")
+                || paymentMethod.equalsIgnoreCase("COUNTER_CASH")
+                || paymentMethod.equalsIgnoreCase("COUNTER_PAYMENT");
+    }
+
+    private String resolvePaymentStatus(BigDecimal total, BigDecimal paid) {
+        total = nvlMoney(total);
+        paid = nvlMoney(paid);
+
+        if (paid.compareTo(BigDecimal.ZERO) <= 0) {
+            return "UNPAID";
+        }
+
+        if (paid.compareTo(total) >= 0) {
+            return "PAID";
+        }
+
+        return "PARTIAL";
+    }
+
+    // =========================
+// PURCHASE RETURNS
+// =========================
+
+@Override
+public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto dto) {
+
+    Supplier supplier = supplierRepository.findById(dto.getSupplierId())
+            .orElseThrow(() -> new RuntimeException("Supplier not found"));
+
+    if (!supplier.getBranchId().equals(dto.getBranchId())) {
+        throw new RuntimeException("Supplier does not belong to this branch");
+    }
+
+    if (dto.getItems() == null || dto.getItems().isEmpty()) {
+        throw new RuntimeException("Return items cannot be empty");
+    }
+
+    Long processedBy = resolveUserId(dto.getProcessedBy());
+
+    BigDecimal calculatedRefundAmount = BigDecimal.ZERO;
+
+    PurchaseReturn purchaseReturn = new PurchaseReturn();
+    purchaseReturn.setBranchId(dto.getBranchId());
+    purchaseReturn.setSupplierId(dto.getSupplierId());
+    purchaseReturn.setSupplyId(dto.getSupplyId());
+    purchaseReturn.setReturnDate(dto.getReturnDate() != null ? dto.getReturnDate() : LocalDateTime.now());
+    purchaseReturn.setRefundMethod(dto.getRefundMethod() != null ? dto.getRefundMethod() : "BALANCE_ADJUSTMENT");
+    purchaseReturn.setRefundAmount(BigDecimal.ZERO);
+    purchaseReturn.setReason(dto.getReason());
+    purchaseReturn.setProcessedBy(processedBy);
+    purchaseReturn.setStatus(dto.getStatus() != null ? dto.getStatus() : "COMPLETED");
+
+    PurchaseReturn savedReturn = purchaseReturnRepository.save(purchaseReturn);
+
+    for (PurchaseReturnItemRequestDto itemDto : dto.getItems()) {
+
+        validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
+
+        BigDecimal qty = nvlQty(itemDto.getQuantity());
+        BigDecimal unitCost = nvlMoney(itemDto.getUnitCost());
+        BigDecimal lineTotal = itemDto.getLineTotal() != null
+                ? itemDto.getLineTotal()
+                : unitCost.multiply(qty);
+
+        String returnStockType = itemDto.getReturnStockType() != null
+                ? itemDto.getReturnStockType().trim().toUpperCase()
+                : "AVAILABLE";
+
+        PurchaseReturnItem returnItem = new PurchaseReturnItem();
+        returnItem.setPurchaseReturnId(savedReturn.getPurchaseReturnId());
+        returnItem.setItemId(itemDto.getItemId());
+        returnItem.setUnitId(itemDto.getUnitId());
+        returnItem.setInternalBatchBarcode(itemDto.getInternalBatchBarcode());
+        returnItem.setReturnStockType(returnStockType);
+        returnItem.setQuantity(qty);
+        returnItem.setUnitCost(unitCost);
+        returnItem.setLineTotal(lineTotal);
+
+        purchaseReturnItemRepository.save(returnItem);
+
+        reduceStockForPurchaseReturn(dto, itemDto, savedReturn.getPurchaseReturnId(), processedBy);
+
+        calculatedRefundAmount = calculatedRefundAmount.add(lineTotal);
+    }
+
+    BigDecimal refundAmount = dto.getRefundAmount() != null
+            ? dto.getRefundAmount()
+            : calculatedRefundAmount;
+
+    savedReturn.setRefundAmount(refundAmount);
+    purchaseReturnRepository.save(savedReturn);
+
+    if ("COMPLETED".equalsIgnoreCase(savedReturn.getStatus())) {
+
+        supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(refundAmount));
+
+        if (supplier.getBalance().compareTo(BigDecimal.ZERO) < 0) {
+            supplier.setBalance(BigDecimal.ZERO);
+        }
+
+        supplier.setUpdatedAt(LocalDateTime.now());
+        supplierRepository.save(supplier);
+
+        SupplierBalanceTransaction txn = new SupplierBalanceTransaction();
+        txn.setBranchId(dto.getBranchId());
+        txn.setSupplierId(dto.getSupplierId());
+        txn.setType("PURCHASE_RETURN");
+        txn.setAmount(refundAmount);
+        txn.setRefTable("purchase_returns");
+        txn.setRefId(savedReturn.getPurchaseReturnId());
+        txn.setNote("Purchase return processed");
+        txn.setCreatedBy(processedBy);
+        txn.setCreatedAt(LocalDateTime.now());
+        supplierBalanceTransactionRepository.save(txn);
+
+        if (dto.getSupplyId() != null) {
+            Supply supply = supplyRepository.findById(dto.getSupplyId())
+                    .orElseThrow(() -> new RuntimeException("Supply not found"));
+
+            BigDecimal newBalance = nvlMoney(supply.getBalanceAmount()).subtract(refundAmount);
+            if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+                newBalance = BigDecimal.ZERO;
+            }
+
+            BigDecimal newPaidLikeValue = nvlMoney(supply.getTotal()).subtract(newBalance);
+
+            supply.setBalanceAmount(newBalance);
+            supply.setPaidAmount(newPaidLikeValue);
+            supply.setPaymentStatus(resolvePaymentStatus(supply.getTotal(), newPaidLikeValue));
+
+            supplyRepository.save(supply);
+        }
+    }
+
+    return getPurchaseReturnById(savedReturn.getPurchaseReturnId());
+}
+
+@Override
+public PurchaseReturnResponseDto getPurchaseReturnById(Long purchaseReturnId) {
+    PurchaseReturn purchaseReturn = purchaseReturnRepository.findById(purchaseReturnId)
+            .orElseThrow(() -> new RuntimeException("Purchase return not found"));
+
+    List<PurchaseReturnItemResponseDto> items = purchaseReturnItemRepository
+            .findByPurchaseReturnId(purchaseReturnId)
+            .stream()
+            .map(this::mapPurchaseReturnItem)
+            .toList();
+
+    return mapPurchaseReturn(purchaseReturn, items);
+}
+
+@Override
+public List<PurchaseReturnResponseDto> getPurchaseReturnsByBranch(Long branchId) {
+    return purchaseReturnRepository.findByBranchIdOrderByReturnDateDesc(branchId)
+            .stream()
+            .map(pr -> getPurchaseReturnById(pr.getPurchaseReturnId()))
+            .toList();
+}
+
+@Override
+public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupplier(Long branchId, Long supplierId) {
+    return purchaseReturnRepository.findByBranchIdAndSupplierIdOrderByReturnDateDesc(branchId, supplierId)
+            .stream()
+            .map(pr -> getPurchaseReturnById(pr.getPurchaseReturnId()))
+            .toList();
+}
+
+@Override
+public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId) {
+    return purchaseReturnRepository.findBySupplyIdOrderByReturnDateDesc(supplyId)
+            .stream()
+            .map(pr -> getPurchaseReturnById(pr.getPurchaseReturnId()))
+            .toList();
+}
+    // =========================
+    // RESOLVE HELPERS
+    // =========================
+
+    private Long resolveUserId(Long userId) {
+        return userId != null ? userId : SYSTEM_USER_ID;
+    }
+
+    private String resolvePoNo(String poNo) {
+        if (poNo != null && !poNo.isBlank()) {
+            return poNo.trim();
+        }
+
+        return "PO-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+    }
+
+    private String resolveGrnNo(String grnNo) {
+        if (grnNo != null && !grnNo.isBlank()) {
+            return grnNo.trim();
+        }
+
+        return "GRN-" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
+    }
+
+    private void reduceStockForPurchaseReturn(
+        PurchaseReturnRequestDto dto,
+        PurchaseReturnItemRequestDto itemDto,
+        Long purchaseReturnId,
+        Long processedBy
+) {
+    String type = itemDto.getReturnStockType() != null
+            ? itemDto.getReturnStockType().trim().toUpperCase()
+            : "AVAILABLE";
+
+    BigDecimal qtyBase = unitConversionService.toBaseQty(
+            itemDto.getItemId(),
+            itemDto.getUnitId(),
+            nvlQty(itemDto.getQuantity())
+    );
+
+    Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
+            .orElseThrow(() -> new RuntimeException("Stock not found"));
+
+    switch (type) {
+        case "DAMAGED" -> {
+            if (nvlQty(stock.getDamagedQty()).compareTo(qtyBase) < 0) {
+                throw new RuntimeException("Not enough damaged stock to return");
+            }
+            stock.setDamagedQty(nvlQty(stock.getDamagedQty()).subtract(qtyBase));
+        }
+
+        case "EXPIRED" -> {
+            if (nvlQty(stock.getExpiredQty()).compareTo(qtyBase) < 0) {
+                throw new RuntimeException("Not enough expired stock to return");
+            }
+            stock.setExpiredQty(nvlQty(stock.getExpiredQty()).subtract(qtyBase));
+        }
+
+        default -> {
+            if (nvlQty(stock.getAvailableQty()).compareTo(qtyBase) < 0) {
+                throw new RuntimeException("Not enough available stock to return");
+            }
+            stock.setAvailableQty(nvlQty(stock.getAvailableQty()).subtract(qtyBase));
+        }
+    }
+
+    stock.setLastUpdated(LocalDateTime.now());
+    stockRepository.save(stock);
+
+    if (itemDto.getInternalBatchBarcode() != null && !itemDto.getInternalBatchBarcode().isBlank()) {
+        StockBatch batch = stockBatchRepository
+                .findByBranchIdAndInternalBatchBarcode(dto.getBranchId(), itemDto.getInternalBatchBarcode())
+                .orElseThrow(() -> new RuntimeException("Stock batch not found"));
+
+        if (nvlQty(batch.getQtyRemaining()).compareTo(qtyBase) < 0) {
+            throw new RuntimeException("Not enough batch quantity to return");
+        }
+
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+        stockBatchRepository.save(batch);
+    }
+
+    StockMovement movement = new StockMovement();
+    movement.setBranchId(dto.getBranchId());
+    movement.setMovementType("PURCHASE_RETURN_OUT");
+    movement.setItemId(itemDto.getItemId());
+    movement.setUnitId(itemDto.getUnitId());
+    movement.setInternalBatchBarcode(itemDto.getInternalBatchBarcode());
+    movement.setQuantity(qtyBase);
+    movement.setUnitCost(nvlMoney(itemDto.getUnitCost()));
+    movement.setUnitPrice(null);
+    movement.setRefTable("purchase_returns");
+    movement.setRefId(purchaseReturnId);
+    movement.setNote("Purchase return from " + type + " stock");
+    movement.setCreatedBy(processedBy);
+    movement.setCreatedAt(LocalDateTime.now());
+
+    stockMovementRepository.save(movement);
+}
+
+    // =========================
     // MAPPERS
     // =========================
 
@@ -782,23 +1243,34 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         return SupplierItemResponseDto.builder()
                 .supplierItemId(supplierItem.getSupplierItemId())
                 .branchId(supplierItem.getBranchId())
-
                 .supplierId(supplierItem.getSupplierId())
                 .supplierName(supplier != null ? supplier.getName() : null)
-
                 .itemId(supplierItem.getItemId())
                 .itemName(item != null ? item.getName() : null)
                 .sku(item != null ? item.getSku() : null)
-
                 .unitId(supplierItem.getUnitId())
                 .lastPurchaseCost(supplierItem.getLastPurchaseCost())
                 .defaultCostPrice(supplierItem.getDefaultCostPrice())
-
                 .isPreferred(supplierItem.getIsPreferred())
                 .isActive(supplierItem.getIsActive())
-
                 .createdAt(supplierItem.getCreatedAt())
                 .updatedAt(supplierItem.getUpdatedAt())
+                .build();
+    }
+
+    private SupplierPaymentResponseDto mapSupplierPayment(SupplierPayment payment) {
+        return SupplierPaymentResponseDto.builder()
+                .supplierPaymentId(payment.getSupplierPaymentId())
+                .branchId(payment.getBranchId())
+                .supplierId(payment.getSupplierId())
+                .supplyId(payment.getSupplyId())
+                .amount(payment.getAmount())
+                .paymentMethod(payment.getPaymentMethod())
+                .paymentDate(payment.getPaymentDate())
+                .paidBy(payment.getPaidBy())
+                .cashSessionId(payment.getCashSessionId())
+                .referenceNo(payment.getReferenceNo())
+                .note(payment.getNote())
                 .build();
     }
 
@@ -817,4 +1289,37 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private String safe(String value) {
         return value == null ? "" : value.trim();
     }
+
+    private PurchaseReturnResponseDto mapPurchaseReturn(
+        PurchaseReturn purchaseReturn,
+        List<PurchaseReturnItemResponseDto> items
+) {
+    return PurchaseReturnResponseDto.builder()
+            .purchaseReturnId(purchaseReturn.getPurchaseReturnId())
+            .branchId(purchaseReturn.getBranchId())
+            .supplierId(purchaseReturn.getSupplierId())
+            .supplyId(purchaseReturn.getSupplyId())
+            .returnDate(purchaseReturn.getReturnDate())
+            .refundMethod(purchaseReturn.getRefundMethod())
+            .refundAmount(purchaseReturn.getRefundAmount())
+            .reason(purchaseReturn.getReason())
+            .processedBy(purchaseReturn.getProcessedBy())
+            .status(purchaseReturn.getStatus())
+            .items(items)
+            .build();
+}
+
+private PurchaseReturnItemResponseDto mapPurchaseReturnItem(PurchaseReturnItem item) {
+    return PurchaseReturnItemResponseDto.builder()
+            .purchaseReturnItemId(item.getPurchaseReturnItemId())
+            .purchaseReturnId(item.getPurchaseReturnId())
+            .itemId(item.getItemId())
+            .unitId(item.getUnitId())
+            .internalBatchBarcode(item.getInternalBatchBarcode())
+            .returnStockType(item.getReturnStockType())
+            .quantity(item.getQuantity())
+            .unitCost(item.getUnitCost())
+            .lineTotal(item.getLineTotal())
+            .build();
+}
 }

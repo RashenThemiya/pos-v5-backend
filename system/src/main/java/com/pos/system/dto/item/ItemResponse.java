@@ -2,6 +2,7 @@ package com.pos.system.dto.item;
 
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -23,4 +24,6 @@ public class ItemResponse {
     private LocalDateTime updatedAt;
     private String scaleItemCode;
     private List<ItemUnitResponse> units;
+    private BigDecimal minStock;
+private BigDecimal maxStock;
 }

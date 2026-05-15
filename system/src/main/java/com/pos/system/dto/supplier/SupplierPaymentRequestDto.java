@@ -7,14 +7,23 @@ import java.time.LocalDateTime;
 
 @Data
 public class SupplierPaymentRequestDto {
+
     private Long branchId;
     private Long supplierId;
     private Long supplyId;
+
     private BigDecimal amount;
+
+    // CASH, COUNTER_CASH, BANK_TRANSFER, CHEQUE, CARD
     private String paymentMethod;
+
     private LocalDateTime paymentDate;
+
     private Long paidBy;
+
+    // Required only for CASH / COUNTER_CASH
     private Long cashSessionId;
+
     private String referenceNo;
     private String note;
 }

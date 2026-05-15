@@ -17,10 +17,6 @@ public class SupplierManagementController {
 
     private final SupplierManagementService supplierManagementService;
 
-    // =========================
-    // SUPPLIER
-    // =========================
-
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_CREATE')")
     @PostMapping
     public ResponseEntity<SupplierResponseDto> createSupplier(@RequestBody SupplierRequestDto dto) {
@@ -46,9 +42,7 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getSuppliersByBranch(branchId));
     }
 
-    // =========================
     // PURCHASE ORDER
-    // =========================
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_CREATE')")
     @PostMapping("/purchase-orders")
@@ -68,9 +62,7 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getPurchaseOrdersByBranch(branchId));
     }
 
-    // =========================
-    // SUPPLY (GRN)
-    // =========================
+    // SUPPLY / GRN
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_CREATE')")
     @PostMapping("/supplies")
@@ -90,9 +82,20 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getSuppliesByBranch(branchId));
     }
 
-    // =========================
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
+    @GetMapping("/supplies/branch/{branchId}/unpaid")
+    public ResponseEntity<List<SupplyResponseDto>> getUnpaidSuppliesByBranch(@PathVariable Long branchId) {
+        return ResponseEntity.ok(supplierManagementService.getUnpaidSuppliesByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
+    @GetMapping("/supplies/branch/{branchId}/supplier/{supplierId}/unpaid")
+    public ResponseEntity<List<SupplyResponseDto>> getUnpaidSuppliesBySupplier(@PathVariable Long branchId,
+                                                                               @PathVariable Long supplierId) {
+        return ResponseEntity.ok(supplierManagementService.getUnpaidSuppliesBySupplier(branchId, supplierId));
+    }
+
     // SUPPLIER PAYMENT
-    // =========================
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_CREATE')")
     @PostMapping("/payments")
@@ -100,51 +103,106 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.createSupplierPayment(dto));
     }
 
-    // =========================
-// SUPPLIER ITEMS
-// =========================
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/{paymentId}")
+    public ResponseEntity<SupplierPaymentResponseDto> getSupplierPaymentById(@PathVariable Long paymentId) {
+        return ResponseEntity.ok(supplierManagementService.getSupplierPaymentById(paymentId));
+    }
 
-@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
-@PostMapping("/items")
-public ResponseEntity<SupplierItemResponseDto> addSupplierItem(@RequestBody SupplierItemRequestDto dto) {
-    return ResponseEntity.ok(supplierManagementService.addSupplierItem(dto));
-}
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/branch/{branchId}")
+    public ResponseEntity<List<SupplierPaymentResponseDto>> getPaymentsByBranch(@PathVariable Long branchId) {
+        return ResponseEntity.ok(supplierManagementService.getPaymentsByBranch(branchId));
+    }
 
-@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
-@PutMapping("/items/{supplierItemId}")
-public ResponseEntity<SupplierItemResponseDto> updateSupplierItem(
-        @PathVariable Long supplierItemId,
-        @RequestBody SupplierItemRequestDto dto
-) {
-    return ResponseEntity.ok(supplierManagementService.updateSupplierItem(supplierItemId, dto));
-}
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/branch/{branchId}/supplier/{supplierId}")
+    public ResponseEntity<List<SupplierPaymentResponseDto>> getPaymentsBySupplier(@PathVariable Long branchId,
+                                                                                  @PathVariable Long supplierId) {
+        return ResponseEntity.ok(supplierManagementService.getPaymentsBySupplier(branchId, supplierId));
+    }
 
-@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
-@GetMapping("/items/branch/{branchId}/supplier/{supplierId}")
-public ResponseEntity<List<SupplierItemResponseDto>> getSupplierItemsBySupplier(
-        @PathVariable Long branchId,
-        @PathVariable Long supplierId
-) {
-    return ResponseEntity.ok(
-            supplierManagementService.getSupplierItemsBySupplier(branchId, supplierId)
-    );
-}
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/supply/{supplyId}")
+    public ResponseEntity<List<SupplierPaymentResponseDto>> getPaymentsBySupply(@PathVariable Long supplyId) {
+        return ResponseEntity.ok(supplierManagementService.getPaymentsBySupply(supplyId));
+    }
 
-@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
-@GetMapping("/items/branch/{branchId}/item/{itemId}")
-public ResponseEntity<List<SupplierItemResponseDto>> getSuppliersByItem(
-        @PathVariable Long branchId,
-        @PathVariable Long itemId
-) {
-    return ResponseEntity.ok(
-            supplierManagementService.getSuppliersByItem(branchId, itemId)
-    );
-}
+    // PURCHASE RETURNS
 
-@PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
-@DeleteMapping("/items/{supplierItemId}")
-public ResponseEntity<String> deleteSupplierItem(@PathVariable Long supplierItemId) {
-    supplierManagementService.deleteSupplierItem(supplierItemId);
-    return ResponseEntity.ok("Supplier item removed successfully");
-}
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_CREATE')")
+    @PostMapping("/purchase-returns")
+    public ResponseEntity<PurchaseReturnResponseDto> createPurchaseReturn(@RequestBody PurchaseReturnRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.createPurchaseReturn(dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/{purchaseReturnId}")
+    public ResponseEntity<PurchaseReturnResponseDto> getPurchaseReturnById(@PathVariable Long purchaseReturnId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseReturnById(purchaseReturnId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/branch/{branchId}")
+    public ResponseEntity<List<PurchaseReturnResponseDto>> getPurchaseReturnsByBranch(@PathVariable Long branchId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseReturnsByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/branch/{branchId}/supplier/{supplierId}")
+    public ResponseEntity<List<PurchaseReturnResponseDto>> getPurchaseReturnsBySupplier(@PathVariable Long branchId,
+                                                                                        @PathVariable Long supplierId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseReturnsBySupplier(branchId, supplierId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/supply/{supplyId}")
+    public ResponseEntity<List<PurchaseReturnResponseDto>> getPurchaseReturnsBySupply(@PathVariable Long supplyId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseReturnsBySupply(supplyId));
+    }
+
+    // SUPPLIER LEDGER
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+    @GetMapping("/branch/{branchId}/supplier/{supplierId}/ledger")
+    public ResponseEntity<List<SupplierBalanceTransactionResponseDto>> getSupplierLedger(@PathVariable Long branchId,
+                                                                                         @PathVariable Long supplierId) {
+        return ResponseEntity.ok(supplierManagementService.getSupplierLedger(branchId, supplierId));
+    }
+
+    // SUPPLIER ITEMS
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+    @PostMapping("/items")
+    public ResponseEntity<SupplierItemResponseDto> addSupplierItem(@RequestBody SupplierItemRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.addSupplierItem(dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+    @PutMapping("/items/{supplierItemId}")
+    public ResponseEntity<SupplierItemResponseDto> updateSupplierItem(@PathVariable Long supplierItemId,
+                                                                      @RequestBody SupplierItemRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.updateSupplierItem(supplierItemId, dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+    @GetMapping("/items/branch/{branchId}/supplier/{supplierId}")
+    public ResponseEntity<List<SupplierItemResponseDto>> getSupplierItemsBySupplier(@PathVariable Long branchId,
+                                                                                    @PathVariable Long supplierId) {
+        return ResponseEntity.ok(supplierManagementService.getSupplierItemsBySupplier(branchId, supplierId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+    @GetMapping("/items/branch/{branchId}/item/{itemId}")
+    public ResponseEntity<List<SupplierItemResponseDto>> getSuppliersByItem(@PathVariable Long branchId,
+                                                                            @PathVariable Long itemId) {
+        return ResponseEntity.ok(supplierManagementService.getSuppliersByItem(branchId, itemId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+    @DeleteMapping("/items/{supplierItemId}")
+    public ResponseEntity<String> deleteSupplierItem(@PathVariable Long supplierItemId) {
+        supplierManagementService.deleteSupplierItem(supplierItemId);
+        return ResponseEntity.ok("Supplier item removed successfully");
+    }
 }

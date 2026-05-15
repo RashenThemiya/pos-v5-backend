@@ -59,7 +59,7 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public PromotionResponse getPromotionById(Long promotionId) {
-        return mapPromotion(findPromoById(promotionId), true);
+        return mapActivePromotions(findPromoById(promotionId), true);
     }
 
     @Override
@@ -197,10 +197,11 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public void removeBuyXGetYRule(Long ruleId) {
-        if (!buyXGetYRuleRepository.existsById(ruleId)) {
-            throw new RuntimeException("Rule not found: " + ruleId);
-        }
-        buyXGetYRuleRepository.deleteById(ruleId);
+        PromotionBuyXGetYRule promotionBuyXGetYRule = buyXGetYRuleRepository.findById(ruleId)
+                .orElseThrow(() -> new RuntimeException("Rule not found: " + ruleId));
+        promotionBuyXGetYRule.setIsActive(false);
+
+        buyXGetYRuleRepository.save(promotionBuyXGetYRule);
     }
 
     @Override
@@ -573,5 +574,38 @@ public class PromotionServiceImpl implements PromotionService {
                 .getQty(r.getGetQty())
                 .getDiscountPercent(r.getGetDiscountPercent())
                 .build();
+    }
+
+    private PromotionResponse mapActivePromotions(Promotion p, boolean includeDetails) {
+        PromotionResponse.PromotionResponseBuilder builder = PromotionResponse.builder()
+                .promotionId(p.getPromotionId())
+                .branchId(p.getBranchId())
+                .name(p.getName())
+                .promoCode(p.getPromoCode())
+                .type(p.getType())
+                .value(p.getValue())
+                .minBillTotal(p.getMinBillTotal())
+                .startAt(p.getStartAt())
+                .endAt(p.getEndAt())
+                .priority(p.getPriority())
+                .maxUsesTotal(p.getMaxUsesTotal())
+                .maxUsesPerCustomer(p.getMaxUsesPerCustomer())
+                .isStackable(p.getIsStackable())
+                .isActive(p.getIsActive())
+                .createdBy(p.getCreatedBy())
+                .createdAt(p.getCreatedAt())
+                .updatedAt(p.getUpdatedAt())
+                .totalRedemptions(redemptionRepository.countByPromotionId(p.getPromotionId()));
+
+        if (includeDetails) {
+            builder.items(promotionItemRepository.findByPromotionIdAndIsActiveTrue(p.getPromotionId())
+                    .stream().map(this::mapPromotionItem).toList());
+            builder.batches(promotionBatchRepository.findByPromotionIdAndIsActiveTrue(p.getPromotionId())
+                    .stream().map(this::mapPromotionBatch).toList());
+            builder.buyXGetYRules(buyXGetYRuleRepository.findByPromotionIdAndIsActiveTrue(p.getPromotionId())
+                    .stream().map(this::mapRule).toList());
+        }
+
+        return builder.build();
     }
 }

@@ -13,6 +13,7 @@ import java.math.BigDecimal;
 @Entity
 @Table(name = "purchase_return_items")
 public class PurchaseReturnItem {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long purchaseReturnItemId;
@@ -24,14 +25,20 @@ public class PurchaseReturnItem {
     private Long itemId;
 
     @Column(nullable = false)
-private Long unitId;
+    private Long unitId;
+
     private String internalBatchBarcode;
-    @Column(nullable = false)
+
+    // AVAILABLE / DAMAGED / EXPIRED
+    @Column(nullable = false, length = 30)
+    private String returnStockType = "AVAILABLE";
+
+    @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal quantity;
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal unitCost;
 
-    @Column(nullable = false)
+    @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal lineTotal;
 }

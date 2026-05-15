@@ -8,4 +8,9 @@ import java.util.List;
 public interface SupplierPaymentRepository extends JpaRepository<SupplierPayment, Long> {
     List<SupplierPayment> findBySupplierId(Long supplierId);
     List<SupplierPayment> findBySupplyId(Long supplyId);
+    List<SupplierPayment> findByBranchIdOrderByPaymentDateDesc(Long branchId);
+
+List<SupplierPayment> findByBranchIdAndSupplierIdOrderByPaymentDateDesc(Long branchId, Long supplierId);
+
+List<SupplierPayment> findBySupplyIdOrderByPaymentDateDesc(Long supplyId);
 }

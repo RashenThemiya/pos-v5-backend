@@ -26,7 +26,6 @@ public class RoleController {
         return ResponseEntity.ok(roleService.create(request));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ROLE_VIEW')")
     @GetMapping
     public ResponseEntity<List<Role>> getAll() {
         return ResponseEntity.ok(roleService.getAll());
@@ -60,7 +59,6 @@ public class RoleController {
         return ResponseEntity.ok(roleService.removePermission(roleId, permissionId));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ROLE_VIEW')")
     @GetMapping("/{roleId}/permissions")
     public ResponseEntity<List<Permission>> getRolePermissions(@PathVariable Long roleId) {
         return ResponseEntity.ok(roleService.getPermissionsByRole(roleId));

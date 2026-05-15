@@ -44,4 +44,7 @@ public class PromotionBuyXGetYRule {
     private BigDecimal getQty;
 
     private BigDecimal getDiscountPercent = BigDecimal.valueOf(100);
+
+
+    private Boolean isActive = true;
 }

@@ -29,7 +29,7 @@ public class Customer {
     @Column(nullable = false, length = 150)
     private String name;
 
-    @Column(length = 50)
+    @Column(length = 50, unique = true)
     private String nic;
 
     private String nicImageFront;
