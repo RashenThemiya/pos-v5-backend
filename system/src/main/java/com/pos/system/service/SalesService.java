@@ -7,6 +7,9 @@ import java.util.List;
 
 public interface SalesService {
 
+    // Unified cashier sale (order + payment in one shot)
+    OrderResponse processSale(ProcessSaleRequest request);
+
     // Orders
     OrderResponse createOrder(CreateOrderRequest request);
     OrderResponse getOrderById(Long orderId);
