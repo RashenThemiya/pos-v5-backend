@@ -2,6 +2,10 @@ package com.pos.system.service;
 
 import com.pos.system.dto.sale.*;
 import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.customer.Customer;
+import com.pos.system.model.customer.CustomerBalanceTransaction;
+import com.pos.system.model.promotion.Promotion;
+import com.pos.system.model.promotion.PromotionRedemption;
 import com.pos.system.model.sale.*;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
@@ -35,6 +39,212 @@ public class SalesServiceImpl implements SalesService {
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final ItemRepository itemRepository;
+    private final CustomerRepository customerRepository;
+    private final CustomerBalanceTransactionRepository customerBalanceTxnRepository;
+    private final PromotionRepository promotionRepository;
+    private final PromotionRedemptionRepository promotionRedemptionRepository;
+
+    // ─── Unified Cashier Sale ────────────────────────────────────────────────────
+
+    @Override
+    public OrderResponse processSale(ProcessSaleRequest request) {
+
+        // ── Validate payments list ──
+        if (request.getPayments() == null || request.getPayments().isEmpty()) {
+            throw new RuntimeException("At least one payment line is required");
+        }
+
+        // ── Credit payment validation: customerId is mandatory ──
+        boolean hasCreditPayment = request.getPayments().stream()
+                .anyMatch(p -> "CREDIT".equalsIgnoreCase(p.getPaymentMethod()));
+
+        if (hasCreditPayment && request.getCustomerId() == null) {
+            throw new RuntimeException("Customer ID is required for CREDIT payment");
+        }
+
+        Customer customer = null;
+        if (request.getCustomerId() != null) {
+            customer = customerRepository.findById(request.getCustomerId())
+                    .orElseThrow(() -> new RuntimeException("Customer not found: " + request.getCustomerId()));
+        }
+
+        // ── Validate credit limit if paying on credit ──
+        if (hasCreditPayment && customer != null) {
+            BigDecimal creditAmount = request.getPayments().stream()
+                    .filter(p -> "CREDIT".equalsIgnoreCase(p.getPaymentMethod()))
+                    .map(ProcessSaleRequest.PaymentLineDto::getAmount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+            if (customer.getCreditLimit() != null) {
+                // shopBalance is amount owed (positive = customer owes us)
+                BigDecimal newBalance = nvl(customer.getShopBalance()).add(creditAmount);
+                if (newBalance.compareTo(customer.getCreditLimit()) > 0) {
+                    throw new RuntimeException(
+                            "Credit limit exceeded. Limit: " + customer.getCreditLimit()
+                            + ", Current balance: " + customer.getShopBalance()
+                            + ", Requested credit: " + creditAmount);
+                }
+            }
+        }
+
+        // ── Build and save the order using existing createOrder logic ──
+        CreateOrderRequest orderRequest = new CreateOrderRequest();
+        orderRequest.setBranchId(request.getBranchId());
+        orderRequest.setUserId(request.getUserId());
+        orderRequest.setCustomerId(request.getCustomerId());
+        orderRequest.setCashSessionId(request.getCashSessionId());
+        orderRequest.setItems(request.getItems());
+        orderRequest.setDiscount(request.getDiscount());
+        orderRequest.setRounding(request.getRounding());
+        orderRequest.setNotes(request.getNotes());
+
+        OrderResponse orderResponse = createOrder(orderRequest);
+        Long orderId = orderResponse.getOrderId();
+        CustomerOrder order = findOrderById(orderId);
+
+        LocalDateTime now = LocalDateTime.now();
+
+        // ── Bill-level promotion redemptions (PERCENTAGE / FIXED) ──
+        // Cashier manually selects these after all items are added.
+        if (request.getBillPromotionIds() != null && !request.getBillPromotionIds().isEmpty()) {
+            for (Long promoId : request.getBillPromotionIds()) {
+                Promotion promo = promotionRepository.findById(promoId)
+                        .orElseThrow(() -> new RuntimeException("Promotion not found: " + promoId));
+
+                if (!Boolean.TRUE.equals(promo.getIsActive()))
+                    throw new RuntimeException("Promotion is no longer active: " + promo.getName());
+                if (promo.getStartAt() != null && now.isBefore(promo.getStartAt()))
+                    throw new RuntimeException("Promotion has not started yet: " + promo.getName());
+                if (promo.getEndAt() != null && now.isAfter(promo.getEndAt()))
+                    throw new RuntimeException("Promotion has expired: " + promo.getName());
+                if (promo.getMaxUsesTotal() != null) {
+                    long used = promotionRedemptionRepository.countByPromotionId(promoId);
+                    if (used >= promo.getMaxUsesTotal())
+                        throw new RuntimeException("Promotion has reached its usage limit: " + promo.getName());
+                }
+                if (promo.getMaxUsesPerCustomer() != null && request.getCustomerId() != null) {
+                    long usedByCustomer = promotionRedemptionRepository
+                            .countByPromotionIdAndCustomerId(promoId, request.getCustomerId());
+                    if (usedByCustomer >= promo.getMaxUsesPerCustomer())
+                        throw new RuntimeException("Customer has reached max uses for promotion: " + promo.getName());
+                }
+
+                PromotionRedemption redemption = new PromotionRedemption();
+                redemption.setBranchId(order.getBranchId());
+                redemption.setPromotionId(promoId);
+                redemption.setOrderId(orderId);
+                redemption.setCustomerId(request.getCustomerId());
+                redemption.setDiscountAmount(nvl(request.getDiscount()));
+                redemption.setUsedAt(now);
+                promotionRedemptionRepository.save(redemption);
+            }
+        }
+
+        // ── Item-level promotion redemptions (ITEM_PERCENTAGE, ITEM_FIXED, BUY_X_GET_Y, BATCH) ──
+        // Resolved automatically per item by the item-get route.
+        // promotionId + discount already set on each OrderProductRequest.
+        // We just record redemptions here so usage limits are tracked.
+        if (request.getItems() != null) {
+            for (OrderProductRequest item : request.getItems()) {
+                if (item.getPromotionId() == null) continue;
+
+                Promotion promo = promotionRepository.findById(item.getPromotionId())
+                        .orElseThrow(() -> new RuntimeException("Item promotion not found: " + item.getPromotionId()));
+
+                if (!Boolean.TRUE.equals(promo.getIsActive()))
+                    throw new RuntimeException("Item promotion is no longer active: " + promo.getName());
+                if (promo.getEndAt() != null && now.isAfter(promo.getEndAt()))
+                    throw new RuntimeException("Item promotion has expired: " + promo.getName());
+                if (promo.getMaxUsesTotal() != null) {
+                    long used = promotionRedemptionRepository.countByPromotionId(item.getPromotionId());
+                    if (used >= promo.getMaxUsesTotal())
+                        throw new RuntimeException("Item promotion has reached its usage limit: " + promo.getName());
+                }
+
+                PromotionRedemption redemption = new PromotionRedemption();
+                redemption.setBranchId(order.getBranchId());
+                redemption.setPromotionId(item.getPromotionId());
+                redemption.setOrderId(orderId);
+                redemption.setCustomerId(request.getCustomerId());
+                redemption.setDiscountAmount(nvl(item.getDiscount()));
+                redemption.setUsedAt(now);
+                promotionRedemptionRepository.save(redemption);
+            }
+        }
+
+        // ── Process each payment line ──
+        BigDecimal totalPaid = BigDecimal.ZERO;
+
+        for (ProcessSaleRequest.PaymentLineDto line : request.getPayments()) {
+            Payment payment = new Payment();
+            payment.setBranchId(order.getBranchId());
+            payment.setOrderId(orderId);
+            payment.setCustomerId(order.getCustomerId());
+            payment.setCashSessionId(order.getCashSessionId());
+            payment.setAmount(line.getAmount());
+            payment.setTenderedAmount(line.getTenderedAmount());
+            payment.setChangeAmount(
+                    line.getTenderedAmount() != null
+                            ? line.getTenderedAmount().subtract(line.getAmount()).max(BigDecimal.ZERO)
+                            : BigDecimal.ZERO
+            );
+            payment.setPaymentMethod(line.getPaymentMethod().toUpperCase());
+            payment.setPaymentDate(LocalDateTime.now());
+            payment.setReceivedBy(request.getUserId());
+            payment.setReferenceNo(line.getReferenceNo());
+            payment.setNote(line.getNote());
+            Payment savedPayment = paymentRepository.save(payment);
+
+            totalPaid = totalPaid.add(line.getAmount());
+
+            // ── Cash session transaction ──
+            if (order.getCashSessionId() != null) {
+                CashSessionTransaction txn = new CashSessionTransaction();
+                txn.setSessionId(order.getCashSessionId());
+                txn.setType("SALE");
+                txn.setAmount(line.getAmount());
+                txn.setPaymentMethod(line.getPaymentMethod().toUpperCase());
+                txn.setPaymentId(savedPayment.getPaymentId());
+                txn.setNote("Invoice: " + order.getInvoiceNo());
+                txn.setCreatedBy(request.getUserId());
+                txn.setCreatedAt(LocalDateTime.now());
+                cashSessionTransactionRepository.save(txn);
+            }
+
+            // ── Credit: update customer balance ──
+            if ("CREDIT".equalsIgnoreCase(line.getPaymentMethod()) && customer != null) {
+                // Increase the amount the customer owes
+                customer.setShopBalance(nvl(customer.getShopBalance()).add(line.getAmount()));
+                customer.setUpdatedAt(LocalDateTime.now());
+                customerRepository.save(customer);
+
+                // Record the credit transaction
+                CustomerBalanceTransaction balanceTxn = new CustomerBalanceTransaction();
+                balanceTxn.setBranchId(order.getBranchId());
+                balanceTxn.setCustomerId(customer.getCustomerId());
+                balanceTxn.setType("CREDIT_SALE");
+                balanceTxn.setAmount(line.getAmount());
+                balanceTxn.setRefTable("customer_orders");
+                balanceTxn.setRefId(orderId);
+                balanceTxn.setNote("Credit sale - Invoice: " + order.getInvoiceNo());
+                balanceTxn.setCreatedBy(request.getUserId());
+                balanceTxn.setCreatedAt(LocalDateTime.now());
+                customerBalanceTxnRepository.save(balanceTxn);
+            }
+        }
+
+        // ── Update order payment status ──
+        if (totalPaid.compareTo(nvl(order.getTotal())) >= 0) {
+            order.setPaymentStatus("PAID");
+        } else if (totalPaid.compareTo(BigDecimal.ZERO) > 0) {
+            order.setPaymentStatus("PARTIAL");
+        }
+        // else stays UNPAID (full credit with no other payment)
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+
+        return buildOrderResponse(order);
+    }
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
