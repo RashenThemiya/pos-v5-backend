@@ -19,6 +19,14 @@ public class SalesController {
 
     private final SalesService salesService;
 
+    // ─── Unified Cashier Sale ─────────────────────────────────────────────────
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_CREATE')")
+    @PostMapping("/process")
+    public ResponseEntity<OrderResponse> processSale(@RequestBody ProcessSaleRequest request) {
+        return ResponseEntity.ok(salesService.processSale(request));
+    }
+
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_CREATE')")

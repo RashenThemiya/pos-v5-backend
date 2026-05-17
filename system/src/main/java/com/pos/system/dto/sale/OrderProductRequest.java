@@ -8,8 +8,16 @@ import java.math.BigDecimal;
 public class OrderProductRequest {
     private Long itemId;
     private Long unitId;
-    private String batchBarcode;     // optional — specific batch to deduct from
+    private String batchBarcode;    // optional — specific batch to deduct from; FIFO if omitted
     private BigDecimal quantity;
     private BigDecimal unitPrice;
-    private BigDecimal discount;     // per-line discount amount
+
+    // Item-level promotion resolved by the item-get route.
+    // Types: ITEM_PERCENTAGE, ITEM_FIXED, BUY_X_GET_Y, BATCH
+    // null if no promotion on this item.
+    private Long promotionId;
+
+    // Discount amount for this line calculated from the promotion above.
+    // 0 if no promotion.
+    private BigDecimal discount;
 }

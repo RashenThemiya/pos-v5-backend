@@ -6,9 +6,6 @@ import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleBarcodeSetting;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.cash.CashSessionTransaction;
-import com.pos.system.model.promotion.Promotion;
-import com.pos.system.model.promotion.PromotionBatch;
-import com.pos.system.model.promotion.PromotionItem;
 import com.pos.system.model.sale.*;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
@@ -46,11 +43,6 @@ public class SalesServiceImpl implements SalesService {
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final ItemRepository itemRepository;
-    private final ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
-    private final ScaleItemMappingRepository scaleItemMappingRepository;
-    private final PromotionRepository promotionRepository;
-    private final PromotionItemRepository promotionItemRepository;
-    private final PromotionBatchRepository promotionBatchRepository;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
