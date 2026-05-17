@@ -12,6 +12,7 @@ import com.pos.system.repository.StockRepository;
 import com.pos.system.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
@@ -27,9 +28,12 @@ public class DataInitializer implements CommandLineRunner {
     private final StockRepository stockRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final PasswordEncoder passwordEncoder;
+    private final JdbcTemplate jdbcTemplate;
 
     @Override
     public void run(String... args) throws Exception {
+        removeOldStockQuantityColumns();
+
         // create default SUPERADMIN only when no auth records exist
         if (authorizationRepository.count() == 0) {
             Authorization superAdminAuth = new Authorization();
@@ -54,6 +58,32 @@ public class DataInitializer implements CommandLineRunner {
 
         // Migrate existing stocks to set unitId if null
         migrateStockUnitIds();
+    }
+
+    private void removeOldStockQuantityColumns() {
+        dropColumnIfExists("stock", "available_qty");
+        dropColumnIfExists("stock", "damaged_qty");
+        dropColumnIfExists("stock", "expired_qty");
+    }
+
+    private void dropColumnIfExists(String tableName, String columnName) {
+        Integer columnCount = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = ?
+                  AND COLUMN_NAME = ?
+                """,
+                Integer.class,
+                tableName,
+                columnName
+        );
+
+        if (columnCount != null && columnCount > 0) {
+            jdbcTemplate.execute("ALTER TABLE " + tableName + " DROP COLUMN " + columnName);
+            System.out.println("Removed old column: " + tableName + "." + columnName);
+        }
     }
 
     private void migrateStockUnitIds() {

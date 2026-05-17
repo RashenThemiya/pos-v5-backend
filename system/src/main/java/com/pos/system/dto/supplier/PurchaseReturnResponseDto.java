@@ -18,6 +18,8 @@ public class PurchaseReturnResponseDto {
 
     private LocalDateTime returnDate;
     private String refundMethod;
+    private Long cashSessionId;
+    private String bankReference;
     private BigDecimal refundAmount;
     private String reason;
     private Long processedBy;

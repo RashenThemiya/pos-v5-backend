@@ -15,6 +15,7 @@ public interface SalesService {
     List<OrderResponse> getOrdersBySession(Long branchId, Long sessionId);
     List<OrderResponse> getOrdersByDateRange(Long branchId, LocalDateTime from, LocalDateTime to);
     OrderResponse cancelOrder(Long orderId, CancelOrderRequest request);
+    List<SaleProductSearchResponse> searchProductsForSale(Long branchId, String query);
 
     // Payments
     OrderResponse processPayment(Long orderId, PaymentRequest request);

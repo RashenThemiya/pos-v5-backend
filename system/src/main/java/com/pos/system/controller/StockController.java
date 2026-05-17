@@ -62,6 +62,12 @@ public class StockController {
         return ResponseEntity.ok(stockService.addOpeningStock(dto));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_ADJUST')")
+    @PostMapping("/adjustments")
+    public ResponseEntity<StockBatchResponseDto> adjustStock(@RequestBody StockAdjustRequest dto) {
+        return ResponseEntity.ok(stockService.adjustStock(dto));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_TRANSFER_CREATE')")
     @PostMapping("/transfers")
     public ResponseEntity<StockTransferResponseDto> createStockTransfer(@RequestBody StockTransferRequestDto dto) {
@@ -72,6 +78,12 @@ public class StockController {
     @GetMapping("/transfers/{transferId}")
     public ResponseEntity<StockTransferResponseDto> getStockTransferById(@PathVariable Long transferId) {
         return ResponseEntity.ok(stockService.getStockTransferById(transferId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_TRANSFER_VIEW')")
+    @GetMapping("/transfers/branch/{branchId}")
+    public ResponseEntity<List<StockTransferResponseDto>> getStockTransfersByBranch(@PathVariable Long branchId) {
+        return ResponseEntity.ok(stockService.getStockTransfersByBranch(branchId));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_COUNT_CREATE')")

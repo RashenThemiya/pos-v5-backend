@@ -17,6 +17,8 @@ public class PurchaseReturnRequestDto {
 
     // BALANCE_ADJUSTMENT / CASH_REFUND / BANK_REFUND
     private String refundMethod;
+    private Long cashSessionId;
+    private String bankReference;
 
     private BigDecimal refundAmount;
     private String reason;

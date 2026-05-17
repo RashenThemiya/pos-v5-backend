@@ -14,10 +14,17 @@ public class StockAdjustRequest {
     @NotNull(message = "Branch ID is required")
     private Long branchId;
 
-    @NotNull(message = "Quantity is required")
-    private BigDecimal quantity; // positive = add, negative = remove
+    @NotNull(message = "Unit ID is required")
+    private Long unitId;
 
-    private String movementType; // ADJUSTMENT_IN, ADJUSTMENT_OUT, DAMAGE, EXPIRED
+    @NotNull(message = "Batch barcode is required")
+    private String internalBatchBarcode;
+
+    @NotNull(message = "Quantity is required")
+    private BigDecimal quantity;
+
+    @NotNull(message = "Adjustment type is required")
+    private String adjustmentType;
 
     private String note;
 

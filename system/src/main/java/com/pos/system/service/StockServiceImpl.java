@@ -1,6 +1,8 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.stock.*;
+import com.pos.system.model.catalog.Brand;
+import com.pos.system.model.catalog.Category;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.stock.*;
@@ -10,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -30,6 +33,8 @@ public class StockServiceImpl implements StockService {
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final CategoryRepository categoryRepository;
+    private final BrandRepository brandRepository;
     private final UnitConversionService unitConversionService;
 
     @Override
@@ -100,13 +105,9 @@ public class StockServiceImpl implements StockService {
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
                         s.setUnitId(baseUnit.getUnitId());
-                        s.setAvailableQty(BigDecimal.ZERO);
-                        s.setDamagedQty(BigDecimal.ZERO);
-                        s.setExpiredQty(BigDecimal.ZERO);
                         return s;
                     });
 
-            stock.setAvailableQty(nvlQty(stock.getAvailableQty()).add(qtyBase));
             stock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(stock);
 
@@ -120,6 +121,9 @@ public class StockServiceImpl implements StockService {
             batch.setReceivedQty(qty);
             batch.setReceivedBaseQty(qtyBase);
             batch.setQtyRemaining(qtyBase);
+            batch.setAvailableQty(qtyBase);
+            batch.setDamagedQty(BigDecimal.ZERO);
+            batch.setExpiredQty(BigDecimal.ZERO);
             batch.setInternalBatchBarcode(internalBatchBarcode);
             batch.setBatchNo(itemDto.getBatchNo());
             batch.setSupplierBatchBarcode(itemDto.getSupplierBatchBarcode());
@@ -154,7 +158,66 @@ public class StockServiceImpl implements StockService {
     }
 
     @Override
+    public StockBatchResponseDto adjustStock(StockAdjustRequest dto) {
+        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+
+        BigDecimal qty = nvlQty(dto.getQuantity());
+        if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Adjustment quantity must be greater than zero");
+        }
+
+        BigDecimal qtyBase = unitConversionService.toBaseQty(dto.getItemId(), dto.getUnitId(), qty);
+        String adjustmentType = dto.getAdjustmentType() != null
+                ? dto.getAdjustmentType().trim().toUpperCase()
+                : "";
+
+        StockBatch batch = stockBatchRepository
+                .findByBranchIdAndInternalBatchBarcode(dto.getBranchId(), dto.getInternalBatchBarcode())
+                .orElseThrow(() -> new RuntimeException("Stock batch not found: " + dto.getInternalBatchBarcode()));
+
+        if (!batch.getItemId().equals(dto.getItemId())) {
+            throw new RuntimeException("Batch does not belong to item: " + dto.getItemId());
+        }
+
+        switch (adjustmentType) {
+            case "AVAILABLE_TO_DAMAGED" -> moveAvailableToDamaged(batch, qtyBase);
+            case "AVAILABLE_TO_EXPIRED" -> moveAvailableToExpired(batch, qtyBase);
+            case "DAMAGED_TO_AVAILABLE" -> moveDamagedToAvailable(batch, qtyBase);
+            case "EXPIRED_TO_AVAILABLE" -> moveExpiredToAvailable(batch, qtyBase);
+            case "AVAILABLE_OUT" -> removeAvailable(batch, qtyBase);
+            case "AVAILABLE_IN" -> addAvailable(batch, qtyBase);
+            default -> throw new RuntimeException("Unsupported adjustment type: " + dto.getAdjustmentType());
+        }
+
+        StockBatch savedBatch = stockBatchRepository.save(batch);
+
+        stockRepository.findByBranchIdAndItemId(dto.getBranchId(), dto.getItemId()).ifPresent(stock -> {
+            stock.setLastUpdated(LocalDateTime.now());
+            stockRepository.save(stock);
+        });
+
+        StockMovement movement = new StockMovement();
+        movement.setBranchId(dto.getBranchId());
+        movement.setMovementType(adjustmentType);
+        movement.setItemId(dto.getItemId());
+        movement.setUnitId(dto.getUnitId());
+        movement.setInternalBatchBarcode(dto.getInternalBatchBarcode());
+        movement.setQuantity(qtyBase);
+        movement.setRefTable("stock_batches");
+        movement.setRefId(savedBatch.getStockBatchId());
+        movement.setNote(dto.getNote());
+        movement.setCreatedBy(dto.getCreatedBy());
+        movement.setCreatedAt(LocalDateTime.now());
+        stockMovementRepository.save(movement);
+
+        return mapBatch(savedBatch);
+    }
+
+    @Override
     public StockTransferResponseDto createStockTransfer(StockTransferRequestDto dto) {
+        if (dto.getFromBranchId() == null || dto.getToBranchId() == null) {
+            throw new RuntimeException("From and to branch are required");
+        }
         if (dto.getFromBranchId().equals(dto.getToBranchId())) {
             throw new RuntimeException("From and to branch cannot be same");
         }
@@ -173,22 +236,27 @@ public class StockServiceImpl implements StockService {
         StockTransfer savedTransfer = stockTransferRepository.save(transfer);
 
         for (StockTransferItemRequestDto itemDto : dto.getItems()) {
-            StockBatch sourceBatch = stockBatchRepository
-                    .findByBranchIdAndInternalBatchBarcode(dto.getFromBranchId(), itemDto.getInternalBatchBarcode())
-                    .orElseThrow(() -> new RuntimeException("Source batch not found: " + itemDto.getInternalBatchBarcode()));
+            StockBatch sourceBatch = findSourceTransferBatch(dto.getFromBranchId(), itemDto);
 
             BigDecimal qty = nvlQty(itemDto.getQuantity());
+            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Transfer quantity must be greater than zero");
+            }
 
-            if (sourceBatch.getQtyRemaining().compareTo(qty) < 0) {
+            if (!sourceBatch.getItemId().equals(itemDto.getItemId())) {
+                throw new RuntimeException("Batch does not belong to item: " + itemDto.getItemId());
+            }
+
+            if (nvlQty(sourceBatch.getAvailableQty()).compareTo(qty) < 0) {
                 throw new RuntimeException("Insufficient batch qty for batch: " + sourceBatch.getInternalBatchBarcode());
             }
 
-            sourceBatch.setQtyRemaining(sourceBatch.getQtyRemaining().subtract(qty));
+            sourceBatch.setQtyRemaining(nvlQty(sourceBatch.getQtyRemaining()).subtract(qty));
+            sourceBatch.setAvailableQty(nvlQty(sourceBatch.getAvailableQty()).subtract(qty));
             stockBatchRepository.save(sourceBatch);
 
             Stock fromStock = stockRepository.findByBranchIdAndItemId(dto.getFromBranchId(), itemDto.getItemId())
                     .orElseThrow(() -> new RuntimeException("Source stock not found"));
-            fromStock.setAvailableQty(nvlQty(fromStock.getAvailableQty()).subtract(qty));
             fromStock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(fromStock);
 
@@ -201,12 +269,8 @@ public class StockServiceImpl implements StockService {
                         s.setBranchId(dto.getToBranchId());
                         s.setItemId(itemDto.getItemId());
                         s.setUnitId(baseUnit.getUnitId());
-                        s.setAvailableQty(BigDecimal.ZERO);
-                        s.setDamagedQty(BigDecimal.ZERO);
-                        s.setExpiredQty(BigDecimal.ZERO);
                         return s;
                     });
-            toStock.setAvailableQty(nvlQty(toStock.getAvailableQty()).add(qty));
             toStock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(toStock);
 
@@ -215,9 +279,12 @@ public class StockServiceImpl implements StockService {
             destBatch.setItemId(sourceBatch.getItemId());
             destBatch.setSupplyProductId(sourceBatch.getSupplyProductId());
             destBatch.setUnitId(sourceBatch.getUnitId());
-            destBatch.setReceivedQty(sourceBatch.getReceivedQty());
-            destBatch.setReceivedBaseQty(sourceBatch.getReceivedBaseQty());
+            destBatch.setReceivedQty(qty);
+            destBatch.setReceivedBaseQty(qty);
             destBatch.setQtyRemaining(qty);
+            destBatch.setAvailableQty(qty);
+            destBatch.setDamagedQty(BigDecimal.ZERO);
+            destBatch.setExpiredQty(BigDecimal.ZERO);
             destBatch.setInternalBatchBarcode(generateInternalBatchBarcode(dto.getToBranchId(), sourceBatch.getItemId()));
             destBatch.setBatchNo(sourceBatch.getBatchNo());
             destBatch.setSupplierBatchBarcode(sourceBatch.getSupplierBatchBarcode());
@@ -230,7 +297,7 @@ public class StockServiceImpl implements StockService {
             StockTransferItem transferItem = new StockTransferItem();
             transferItem.setTransferId(savedTransfer.getTransferId());
             transferItem.setItemId(itemDto.getItemId());
-            transferItem.setInternalBatchBarcode(itemDto.getInternalBatchBarcode());
+            transferItem.setInternalBatchBarcode(sourceBatch.getInternalBatchBarcode());
             transferItem.setQuantity(qty);
             stockTransferItemRepository.save(transferItem);
 
@@ -270,12 +337,44 @@ public class StockServiceImpl implements StockService {
         return getStockTransferById(savedTransfer.getTransferId());
     }
 
+    private StockBatch findSourceTransferBatch(Long fromBranchId, StockTransferItemRequestDto itemDto) {
+        StockBatch sourceBatch;
+        if (itemDto.getStockBatchId() != null) {
+            sourceBatch = stockBatchRepository.findById(itemDto.getStockBatchId())
+                    .orElseThrow(() -> new RuntimeException("Source batch not found: " + itemDto.getStockBatchId()));
+        } else if (itemDto.getInternalBatchBarcode() != null && !itemDto.getInternalBatchBarcode().isBlank()) {
+            sourceBatch = stockBatchRepository
+                    .findByBranchIdAndInternalBatchBarcode(fromBranchId, itemDto.getInternalBatchBarcode())
+                    .orElseThrow(() -> new RuntimeException("Source batch not found: " + itemDto.getInternalBatchBarcode()));
+        } else {
+            throw new RuntimeException("stockBatchId or internalBatchBarcode is required");
+        }
+
+        if (!sourceBatch.getBranchId().equals(fromBranchId)) {
+            throw new RuntimeException("Source batch does not belong to from branch");
+        }
+
+        return sourceBatch;
+    }
+
     @Override
     public StockTransferResponseDto getStockTransferById(Long transferId) {
         StockTransfer transfer = stockTransferRepository.findById(transferId)
                 .orElseThrow(() -> new RuntimeException("Transfer not found"));
 
-        List<StockTransferItemResponseDto> items = stockTransferItemRepository.findByTransferId(transferId)
+        return mapStockTransfer(transfer);
+    }
+
+    @Override
+    public List<StockTransferResponseDto> getStockTransfersByBranch(Long branchId) {
+        return stockTransferRepository.findByFromBranchIdOrToBranchIdOrderByTransferDateDesc(branchId, branchId)
+                .stream()
+                .map(this::mapStockTransfer)
+                .toList();
+    }
+
+    private StockTransferResponseDto mapStockTransfer(StockTransfer transfer) {
+        List<StockTransferItemResponseDto> items = stockTransferItemRepository.findByTransferId(transfer.getTransferId())
                 .stream()
                 .map(i -> StockTransferItemResponseDto.builder()
                         .transferItemId(i.getTransferItemId())
@@ -323,13 +422,10 @@ public class StockServiceImpl implements StockService {
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
                         s.setUnitId(baseUnit.getUnitId());
-                        s.setAvailableQty(BigDecimal.ZERO);
-                        s.setDamagedQty(BigDecimal.ZERO);
-                        s.setExpiredQty(BigDecimal.ZERO);
                         return s;
                     });
 
-            BigDecimal systemQty = nvlQty(stock.getAvailableQty());
+            BigDecimal systemQty = getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.AVAILABLE);
             BigDecimal countedQty = nvlQty(itemDto.getCountedQty());
             BigDecimal diff = countedQty.subtract(systemQty);
 
@@ -415,28 +511,186 @@ public class StockServiceImpl implements StockService {
     }
 
     private StockResponseDto mapStock(Stock stock) {
-        return StockResponseDto.builder()
+        Item item = itemRepository.findByItemIdAndBranchId(stock.getItemId(), stock.getBranchId()).orElse(null);
+        Category category = item != null && item.getCategoryId() != null
+                ? categoryRepository.findByCategoryIdAndBranchId(item.getCategoryId(), stock.getBranchId()).orElse(null)
+                : null;
+        Category parentCategory = category != null && category.getParentId() != null
+                ? categoryRepository.findByCategoryIdAndBranchId(category.getParentId(), stock.getBranchId()).orElse(null)
+                : null;
+        Brand brand = item != null && item.getBrandId() != null
+                ? brandRepository.findByBrandIdAndBranchId(item.getBrandId(), stock.getBranchId()).orElse(null)
+                : null;
+        List<StockResponseDto.UnitStockDto> unitStocks = item != null
+                ? itemUnitRepository.findByItemId(stock.getItemId())
+                        .stream()
+                        .filter(itemUnit -> itemUnit.getBranchId().equals(stock.getBranchId()))
+                        .map(itemUnit -> mapUnitStock(stock, itemUnit))
+                        .toList()
+                : List.of();
+
+        StockResponseDto.StockResponseDtoBuilder builder = StockResponseDto.builder()
                 .stockId(stock.getStockId())
                 .branchId(stock.getBranchId())
                 .itemId(stock.getItemId())
-                .unitId(stock.getUnitId())
-                .availableQty(stock.getAvailableQty())
-                .damagedQty(stock.getDamagedQty())
-                .expiredQty(stock.getExpiredQty())
-                .lastUpdated(stock.getLastUpdated())
+                .unitStocks(unitStocks)
+                .lastUpdated(stock.getLastUpdated());
+
+        if (item != null) {
+            builder.itemSku(item.getSku())
+                    .itemName(item.getName())
+                    .itemImage(item.getImage())
+                    .itemIsWeighed(item.getIsWeighed())
+                    .itemIsActive(item.getIsActive())
+                    .minStock(item.getMinStock())
+                    .maxStock(item.getMaxStock())
+                    .categoryId(item.getCategoryId())
+                    .brandId(item.getBrandId());
+        }
+
+        if (category != null) {
+            builder.categoryName(category.getName())
+                    .categoryIsActive(category.getIsActive());
+
+            if (parentCategory != null) {
+                builder.parentCategoryId(parentCategory.getCategoryId())
+                        .parentCategoryName(parentCategory.getName())
+                        .parentCategoryIsActive(parentCategory.getIsActive())
+                        .subCategoryId(category.getCategoryId())
+                        .subCategoryName(category.getName())
+                        .subCategoryIsActive(category.getIsActive());
+            } else {
+                builder.parentCategoryId(category.getCategoryId())
+                        .parentCategoryName(category.getName())
+                        .parentCategoryIsActive(category.getIsActive());
+            }
+        }
+
+        if (brand != null) {
+            builder.brandName(brand.getName())
+                    .brandIsActive(brand.getIsActive());
+        }
+
+        return builder.build();
+    }
+
+    private StockResponseDto.UnitStockDto mapUnitStock(Stock stock, ItemUnit unit) {
+        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(
+                stock.getBranchId(),
+                stock.getItemId()
+        ).stream()
+                .filter(batch -> batch.getUnitId().equals(unit.getUnitId()))
+                .toList();
+        BigDecimal availableBaseQty = batches.stream()
+                .map(batch -> batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal damagedBaseQty = batches.stream()
+                .map(batch -> nvlQty(batch.getDamagedQty()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal expiredBaseQty = batches.stream()
+                .map(batch -> nvlQty(batch.getExpiredQty()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        return StockResponseDto.UnitStockDto.builder()
+                .unitId(unit.getUnitId())
+                .unitName(unit.getUnitName())
+                .unitBarcode(unit.getBarcode())
+                .multiplierToBase(unit.getMultiplierToBase())
+                .defaultSellingPrice(unit.getDefaultSellingPrice())
+                .isBaseUnit(unit.getIsBaseUnit())
+                .isActive(unit.getIsActive())
+                .availableQty(toResponseUnitQty(availableBaseQty, unit))
+                .damagedQty(toResponseUnitQty(damagedBaseQty, unit))
+                .expiredQty(toResponseUnitQty(expiredBaseQty, unit))
                 .build();
     }
 
+    private BigDecimal toResponseUnitQty(BigDecimal baseQty, ItemUnit unit) {
+        BigDecimal qty = nvlQty(baseQty);
+        if (unit == null || unit.getMultiplierToBase() == null
+                || unit.getMultiplierToBase().compareTo(BigDecimal.ZERO) <= 0) {
+            return qty;
+        }
+        return qty.divide(unit.getMultiplierToBase(), 4, RoundingMode.HALF_UP);
+    }
+
+    private void moveAvailableToDamaged(StockBatch batch, BigDecimal qtyBase) {
+        requireQty(nvlQty(batch.getAvailableQty()), qtyBase, "available");
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+        batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(qtyBase));
+    }
+
+    private void moveAvailableToExpired(StockBatch batch, BigDecimal qtyBase) {
+        requireQty(nvlQty(batch.getAvailableQty()), qtyBase, "available");
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+        batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(qtyBase));
+    }
+
+    private void moveDamagedToAvailable(StockBatch batch, BigDecimal qtyBase) {
+        requireQty(nvlQty(batch.getDamagedQty()), qtyBase, "damaged");
+        batch.setDamagedQty(nvlQty(batch.getDamagedQty()).subtract(qtyBase));
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).add(qtyBase));
+    }
+
+    private void moveExpiredToAvailable(StockBatch batch, BigDecimal qtyBase) {
+        requireQty(nvlQty(batch.getExpiredQty()), qtyBase, "expired");
+        batch.setExpiredQty(nvlQty(batch.getExpiredQty()).subtract(qtyBase));
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).add(qtyBase));
+    }
+
+    private void removeAvailable(StockBatch batch, BigDecimal qtyBase) {
+        requireQty(nvlQty(batch.getAvailableQty()), qtyBase, "available");
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+    }
+
+    private void addAvailable(StockBatch batch, BigDecimal qtyBase) {
+        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(qtyBase));
+        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).add(qtyBase));
+    }
+
+    private void requireQty(BigDecimal currentQty, BigDecimal requestedQty, String stockType) {
+        if (currentQty.compareTo(requestedQty) < 0) {
+            throw new RuntimeException("Not enough " + stockType + " stock in batch");
+        }
+    }
+
     private StockBatchResponseDto mapBatch(StockBatch batch) {
+        Item item = itemRepository.findByItemIdAndBranchId(batch.getItemId(), batch.getBranchId()).orElse(null);
+        ItemUnit unit = itemUnitRepository.findById(batch.getUnitId())
+                .filter(itemUnit -> itemUnit.getItemId().equals(batch.getItemId()))
+                .filter(itemUnit -> itemUnit.getBranchId().equals(batch.getBranchId()))
+                .orElse(null);
+
+        BigDecimal qtyRemaining = toResponseUnitQty(batch.getQtyRemaining(), unit);
+        BigDecimal availableQty = toResponseUnitQty(
+                batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining(),
+                unit
+        );
+        BigDecimal damagedQty = toResponseUnitQty(batch.getDamagedQty(), unit);
+        BigDecimal expiredQty = toResponseUnitQty(batch.getExpiredQty(), unit);
+
         return StockBatchResponseDto.builder()
                 .stockBatchId(batch.getStockBatchId())
                 .branchId(batch.getBranchId())
                 .itemId(batch.getItemId())
+                .itemSku(item != null ? item.getSku() : null)
+                .itemName(item != null ? item.getName() : null)
                 .supplyProductId(batch.getSupplyProductId())
                 .unitId(batch.getUnitId())
+                .unitName(unit != null ? unit.getUnitName() : null)
+                .unitBarcode(unit != null ? unit.getBarcode() : null)
+                .unitMultiplierToBase(unit != null ? unit.getMultiplierToBase() : null)
+                .unitIsBaseUnit(unit != null ? unit.getIsBaseUnit() : null)
+                .unitIsActive(unit != null ? unit.getIsActive() : null)
                 .receivedQty(batch.getReceivedQty())
-                .receivedBaseQty(batch.getReceivedBaseQty())
-                .qtyRemaining(batch.getQtyRemaining())
+                .qtyRemaining(qtyRemaining)
+                .availableQty(availableQty)
+                .damagedQty(damagedQty)
+                .expiredQty(expiredQty)
                 .internalBatchBarcode(batch.getInternalBatchBarcode())
                 .batchNo(batch.getBatchNo())
                 .supplierBatchBarcode(batch.getSupplierBatchBarcode())
@@ -468,5 +722,22 @@ public class StockServiceImpl implements StockService {
 
     private BigDecimal nvlQty(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
+        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream()
+                .map(batch -> switch (type) {
+                    case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
+                    case DAMAGED -> nvlQty(batch.getDamagedQty());
+                    case EXPIRED -> nvlQty(batch.getExpiredQty());
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private enum StockQtyType {
+        AVAILABLE,
+        DAMAGED,
+        EXPIRED
     }
 }

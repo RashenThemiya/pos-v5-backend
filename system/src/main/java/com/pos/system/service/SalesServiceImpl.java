@@ -1,7 +1,14 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.sale.*;
+import com.pos.system.model.catalog.Item;
+import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ScaleBarcodeSetting;
+import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.promotion.Promotion;
+import com.pos.system.model.promotion.PromotionBatch;
+import com.pos.system.model.promotion.PromotionItem;
 import com.pos.system.model.sale.*;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
@@ -15,7 +22,11 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -35,6 +46,11 @@ public class SalesServiceImpl implements SalesService {
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final ItemRepository itemRepository;
+    private final ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
+    private final ScaleItemMappingRepository scaleItemMappingRepository;
+    private final PromotionRepository promotionRepository;
+    private final PromotionItemRepository promotionItemRepository;
+    private final PromotionBatchRepository promotionBatchRepository;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
@@ -162,6 +178,47 @@ public class SalesServiceImpl implements SalesService {
     }
 
     // ─── Payments ────────────────────────────────────────────────────────────────
+
+    @Override
+    public List<SaleProductSearchResponse> searchProductsForSale(Long branchId, String query) {
+        String normalized = normalizeSearch(query);
+        if (normalized == null) {
+            throw new RuntimeException("Search query is required");
+        }
+
+        Map<String, SaleProductSearchResponse> results = new LinkedHashMap<>();
+
+        itemUnitRepository.findByBranchIdAndBarcodeAndIsActiveTrue(branchId, normalized)
+                .ifPresent(unit -> addResult(results, buildSaleSearchResult(
+                        "ITEM_UNIT_BARCODE",
+                        findActiveItem(branchId, unit.getItemId()),
+                        unit,
+                        null,
+                        null
+                )));
+
+        decodeScaleBarcode(branchId, normalized).ifPresent(result -> addResult(results, result));
+
+        stockBatchRepository.searchByBranchAndBatchText(branchId, normalized)
+                .forEach(batch -> addResult(results, buildSaleSearchResult(
+                        "STOCK_BATCH",
+                        findActiveItem(branchId, batch.getItemId()),
+                        findUnit(batch.getItemId(), batch.getUnitId()).orElse(null),
+                        batch,
+                        null
+                )));
+
+        itemRepository.searchActiveByBranchAndNameOrSku(branchId, normalized)
+                .forEach(item -> addResult(results, buildSaleSearchResult(
+                        "ITEM",
+                        item,
+                        findBaseUnit(item.getItemId()).orElse(null),
+                        null,
+                        null
+                )));
+
+        return new ArrayList<>(results.values());
+    }
 
     @Override
     public OrderResponse processPayment(Long orderId, PaymentRequest request) {
@@ -329,12 +386,12 @@ public class SalesServiceImpl implements SalesService {
         Stock stock = stockRepository.findByBranchIdAndItemId(branchId, item.getItemId())
                 .orElseThrow(() -> new RuntimeException("No stock record for item: " + item.getItemId()));
 
-        if (stock.getAvailableQty().compareTo(baseQty) < 0) {
+        BigDecimal availableQty = getBatchQtyTotal(branchId, item.getItemId(), StockQtyType.AVAILABLE);
+        if (availableQty.compareTo(baseQty) < 0) {
             throw new RuntimeException("Insufficient stock for item: " + item.getItemId()
-                    + " (available: " + stock.getAvailableQty() + ", required: " + baseQty + ")");
+                    + " (available: " + availableQty + ", required: " + baseQty + ")");
         }
 
-        stock.setAvailableQty(stock.getAvailableQty().subtract(baseQty));
         stock.setLastUpdated(LocalDateTime.now());
         stockRepository.save(stock);
 
@@ -344,6 +401,7 @@ public class SalesServiceImpl implements SalesService {
                     .findByBranchIdAndInternalBatchBarcode(branchId, item.getBatchBarcode())
                     .orElseThrow(() -> new RuntimeException("Batch not found: " + item.getBatchBarcode()));
             batch.setQtyRemaining(batch.getQtyRemaining().subtract(baseQty));
+            batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(baseQty));
             stockBatchRepository.save(batch);
         } else {
             // FIFO — deduct from oldest batches first
@@ -381,6 +439,7 @@ public class SalesServiceImpl implements SalesService {
 
             BigDecimal deduct = remaining.min(batch.getQtyRemaining());
             batch.setQtyRemaining(batch.getQtyRemaining().subtract(deduct));
+            batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(deduct));
             stockBatchRepository.save(batch);
             remaining = remaining.subtract(deduct);
         }
@@ -395,7 +454,6 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal baseQty = op.getQuantity().multiply(multiplier);
 
         stockRepository.findByBranchIdAndItemId(branchId, op.getItemId()).ifPresent(stock -> {
-            stock.setAvailableQty(stock.getAvailableQty().add(baseQty));
             stock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(stock);
         });
@@ -404,6 +462,7 @@ public class SalesServiceImpl implements SalesService {
             stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, op.getBatchBarcode())
                     .ifPresent(batch -> {
                         batch.setQtyRemaining(batch.getQtyRemaining().add(baseQty));
+                        batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(baseQty));
                         stockBatchRepository.save(batch);
                     });
         }
@@ -429,13 +488,22 @@ public class SalesServiceImpl implements SalesService {
         if (!"GOOD".equalsIgnoreCase(item.getCondition())) {
             // damaged/expired — move to damaged stock
             stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
-                stock.setDamagedQty(stock.getDamagedQty().add(item.getQuantity()));
                 stock.setLastUpdated(LocalDateTime.now());
                 stockRepository.save(stock);
             });
+            if (item.getInternalBatchBarcode() != null) {
+                stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
+                        .ifPresent(batch -> {
+                            if ("EXPIRED".equalsIgnoreCase(item.getCondition())) {
+                                batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(item.getQuantity()));
+                            } else {
+                                batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(item.getQuantity()));
+                            }
+                            stockBatchRepository.save(batch);
+                        });
+            }
         } else {
             stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
-                stock.setAvailableQty(stock.getAvailableQty().add(item.getQuantity()));
                 stock.setLastUpdated(LocalDateTime.now());
                 stockRepository.save(stock);
 
@@ -443,6 +511,7 @@ public class SalesServiceImpl implements SalesService {
                     stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
                             .ifPresent(batch -> {
                                 batch.setQtyRemaining(batch.getQtyRemaining().add(item.getQuantity()));
+                                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(item.getQuantity()));
                                 stockBatchRepository.save(batch);
                             });
                 }
@@ -466,6 +535,211 @@ public class SalesServiceImpl implements SalesService {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+    private Optional<SaleProductSearchResponse> decodeScaleBarcode(Long branchId, String barcode) {
+        return scaleBarcodeSettingRepository.findByBranchIdAndIsActiveTrue(branchId)
+                .stream()
+                .filter(setting -> barcode.startsWith(setting.getPrefix()))
+                .filter(setting -> barcode.length() == setting.getTotalLength())
+                .findFirst()
+                .flatMap(setting -> buildScaleBarcodeResult(branchId, barcode, setting));
+    }
+
+    private Optional<SaleProductSearchResponse> buildScaleBarcodeResult(Long branchId, String barcode, ScaleBarcodeSetting setting) {
+        String scaleItemCode = substringByOneBasedRange(barcode, setting.getItemCodeStart(), setting.getItemCodeLength());
+        String rawValue = substringByOneBasedRange(barcode, setting.getValueStart(), setting.getValueLength());
+
+        ScaleItemMapping mapping = scaleItemMappingRepository
+                .findByBranchIdAndScaleItemCodeAndIsActiveTrue(branchId, scaleItemCode)
+                .orElse(null);
+        if (mapping == null) {
+            return Optional.empty();
+        }
+
+        Item item = findActiveItem(branchId, mapping.getItemId());
+        ItemUnit unit = findUnit(mapping.getItemId(), mapping.getUnitId())
+                .orElseThrow(() -> new RuntimeException("Scale item unit not found: " + mapping.getUnitId()));
+
+        BigDecimal decodedValue = new BigDecimal(rawValue).movePointLeft(setting.getValueDecimalPlaces());
+        BigDecimal quantity = "WEIGHT".equalsIgnoreCase(setting.getValueType()) ? decodedValue : null;
+        BigDecimal encodedPrice = "PRICE".equalsIgnoreCase(setting.getValueType()) ? decodedValue : null;
+
+        SaleProductSearchResponse.ScanDto scan = SaleProductSearchResponse.ScanDto.builder()
+                .barcode(barcode)
+                .scaleItemCode(scaleItemCode)
+                .quantity(quantity)
+                .quantityUnit(unit.getUnitName())
+                .encodedPrice(encodedPrice)
+                .build();
+
+        return Optional.of(buildSaleSearchResult("SCALE_BARCODE", item, unit, null, scan));
+    }
+
+    private SaleProductSearchResponse buildSaleSearchResult(String matchType, Item item, ItemUnit matchedUnit,
+                                                            StockBatch matchedBatch, SaleProductSearchResponse.ScanDto scan) {
+        List<ItemUnit> units = itemUnitRepository.findByItemIdAndIsActiveTrue(item.getItemId());
+        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(item.getBranchId(), item.getItemId());
+
+        return SaleProductSearchResponse.builder()
+                .matchType(matchType)
+                .scan(scan)
+                .item(mapSearchItem(item))
+                .matchedUnit(matchedUnit != null ? mapSearchUnit(matchedUnit) : null)
+                .matchedBatch(matchedBatch != null ? mapSearchBatch(matchedBatch) : null)
+                .stock(stockRepository.findByBranchIdAndItemId(item.getBranchId(), item.getItemId()).map(this::mapSearchStock).orElse(null))
+                .units(units.stream().map(this::mapSearchUnit).toList())
+                .batches(batches.stream().map(this::mapSearchBatch).toList())
+                .promotions(findSalePromotions(item, matchedBatch))
+                .build();
+    }
+
+    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, StockBatch matchedBatch) {
+        List<SaleProductSearchResponse.PromotionDto> result = new ArrayList<>();
+        List<Promotion> activePromotions = promotionRepository.findActiveByBranchIdAndNow(item.getBranchId(), LocalDateTime.now());
+
+        for (Promotion promotion : activePromotions) {
+            promotionItemRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
+                    .filter(promotionItem -> promotionItem.getItemId().equals(item.getItemId()))
+                    .forEach(promotionItem -> result.add(mapSearchPromotion(promotion, promotionItem, null)));
+
+            if (matchedBatch != null) {
+                promotionBatchRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
+                        .filter(promotionBatch -> batchPromotionMatches(promotionBatch, matchedBatch))
+                        .forEach(promotionBatch -> result.add(mapSearchPromotion(promotion, null, promotionBatch)));
+            }
+        }
+
+        return result;
+    }
+
+    private boolean batchPromotionMatches(PromotionBatch promotionBatch, StockBatch stockBatch) {
+        String barcode = promotionBatch.getBarcode();
+        return barcode != null && (barcode.equals(stockBatch.getInternalBatchBarcode())
+                || barcode.equals(stockBatch.getSupplierBatchBarcode())
+                || barcode.equals(stockBatch.getBatchNo()));
+    }
+
+    private SaleProductSearchResponse.PromotionDto mapSearchPromotion(Promotion promotion, PromotionItem promotionItem,
+                                                                      PromotionBatch promotionBatch) {
+        return SaleProductSearchResponse.PromotionDto.builder()
+                .promotionId(promotion.getPromotionId())
+                .name(promotion.getName())
+                .promoCode(promotion.getPromoCode())
+                .type(promotion.getType())
+                .value(promotion.getValue())
+                .priority(promotion.getPriority())
+                .isStackable(promotion.getIsStackable())
+                .appliesBy(promotionBatch != null ? "BATCH" : "ITEM")
+                .promotionItemId(promotionItem != null ? promotionItem.getId() : null)
+                .promotionBatchId(promotionBatch != null ? promotionBatch.getId() : null)
+                .unitId(promotionItem != null ? promotionItem.getUnitId() : null)
+                .batchBarcode(promotionBatch != null ? promotionBatch.getBarcode() : null)
+                .maxQty(promotionItem != null ? promotionItem.getMaxQty() : promotionBatch.getMaxQty())
+                .usedQty(promotionItem != null ? promotionItem.getUsedQty() : promotionBatch.getUsedQty())
+                .startAt(promotion.getStartAt())
+                .endAt(promotion.getEndAt())
+                .build();
+    }
+
+    private SaleProductSearchResponse.ItemDto mapSearchItem(Item item) {
+        return SaleProductSearchResponse.ItemDto.builder()
+                .itemId(item.getItemId())
+                .branchId(item.getBranchId())
+                .sku(item.getSku())
+                .name(item.getName())
+                .image(item.getImage())
+                .categoryId(item.getCategoryId())
+                .brandId(item.getBrandId())
+                .isWeighed(item.getIsWeighed())
+                .scaleBarcodePrefix(item.getScaleBarcodePrefix())
+                .isActive(item.getIsActive())
+                .minStock(item.getMinStock())
+                .maxStock(item.getMaxStock())
+                .build();
+    }
+
+    private SaleProductSearchResponse.UnitDto mapSearchUnit(ItemUnit unit) {
+        return SaleProductSearchResponse.UnitDto.builder()
+                .unitId(unit.getUnitId())
+                .unitName(unit.getUnitName())
+                .multiplierToBase(unit.getMultiplierToBase())
+                .barcode(unit.getBarcode())
+                .defaultSellingPrice(unit.getDefaultSellingPrice())
+                .isBaseUnit(unit.getIsBaseUnit())
+                .isActive(unit.getIsActive())
+                .build();
+    }
+
+    private SaleProductSearchResponse.StockDto mapSearchStock(Stock stock) {
+        return SaleProductSearchResponse.StockDto.builder()
+                .stockId(stock.getStockId())
+                .unitId(stock.getUnitId())
+                .lastUpdated(stock.getLastUpdated())
+                .build();
+    }
+
+    private SaleProductSearchResponse.BatchDto mapSearchBatch(StockBatch batch) {
+        ItemUnit unit = findUnit(batch.getItemId(), batch.getUnitId()).orElse(null);
+        return SaleProductSearchResponse.BatchDto.builder()
+                .stockBatchId(batch.getStockBatchId())
+                .supplyProductId(batch.getSupplyProductId())
+                .unitId(batch.getUnitId())
+                .unitName(unit != null ? unit.getUnitName() : null)
+                .unitBarcode(unit != null ? unit.getBarcode() : null)
+                .receivedQty(batch.getReceivedQty())
+                .receivedBaseQty(batch.getReceivedBaseQty())
+                .qtyRemaining(batch.getQtyRemaining())
+                .availableQty(batch.getAvailableQty())
+                .damagedQty(batch.getDamagedQty())
+                .expiredQty(batch.getExpiredQty())
+                .internalBatchBarcode(batch.getInternalBatchBarcode())
+                .batchNo(batch.getBatchNo())
+                .supplierBatchBarcode(batch.getSupplierBatchBarcode())
+                .expiryDate(batch.getExpiryDate())
+                .costPrice(batch.getCostPrice())
+                .sellingPrice(batch.getSellingPrice())
+                .createdAt(batch.getCreatedAt())
+                .build();
+    }
+
+    private void addResult(Map<String, SaleProductSearchResponse> results, SaleProductSearchResponse response) {
+        if (response == null || response.getItem() == null) {
+            return;
+        }
+        String batchKey = response.getMatchedBatch() != null ? ":batch:" + response.getMatchedBatch().getStockBatchId() : "";
+        results.putIfAbsent(response.getItem().getItemId() + batchKey, response);
+    }
+
+    private Item findActiveItem(Long branchId, Long itemId) {
+        return itemRepository.findByItemIdAndBranchId(itemId, branchId)
+                .filter(item -> Boolean.TRUE.equals(item.getIsActive()))
+                .orElseThrow(() -> new RuntimeException("Item not found or inactive: " + itemId));
+    }
+
+    private Optional<ItemUnit> findUnit(Long itemId, Long unitId) {
+        return itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId);
+    }
+
+    private Optional<ItemUnit> findBaseUnit(Long itemId) {
+        return itemUnitRepository.findByItemIdAndIsBaseUnitTrueAndIsActiveTrue(itemId);
+    }
+
+    private String normalizeSearch(String query) {
+        if (query == null) {
+            return null;
+        }
+        String normalized = query.trim().replace(" ", "");
+        return normalized.isEmpty() ? null : normalized;
+    }
+
+    private String substringByOneBasedRange(String value, Integer start, Integer length) {
+        int beginIndex = start - 1;
+        int endIndex = beginIndex + length;
+        if (beginIndex < 0 || endIndex > value.length()) {
+            throw new RuntimeException("Scale barcode setting range is invalid for scanned barcode");
+        }
+        return value.substring(beginIndex, endIndex);
+    }
 
     private String generateInvoiceNo(Long branchId) {
         String prefix = "INV-" + branchId + "-";
@@ -608,5 +882,26 @@ public class SalesServiceImpl implements SalesService {
                 .status(r.getStatus())
                 .items(items)
                 .build();
+    }
+
+    private BigDecimal nvlQty(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
+        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream()
+                .map(batch -> switch (type) {
+                    case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
+                    case DAMAGED -> nvlQty(batch.getDamagedQty());
+                    case EXPIRED -> nvlQty(batch.getExpiredQty());
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private enum StockQtyType {
+        AVAILABLE,
+        DAMAGED,
+        EXPIRED
     }
 }
