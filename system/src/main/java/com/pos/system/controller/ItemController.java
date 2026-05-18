@@ -1,6 +1,7 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.common.ApiResponse;
+import com.pos.system.dto.item.ItemSearchRequest;
 import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
@@ -8,8 +9,12 @@ import com.pos.system.dto.item.ItemUnitResponse;
 import com.pos.system.service.ItemService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -40,6 +45,15 @@ public class ItemController {
     @GetMapping("/branch/{branchId}/active")
     public ResponseEntity<ApiResponse<List<ItemResponse>>> getActiveByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(ApiResponse.success("Active items fetched successfully", itemService.getActiveByBranch(branchId)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_VIEW')")
+    @GetMapping("/search")
+    public ResponseEntity<ApiResponse<Page<ItemResponse>>> search(
+            @ModelAttribute ItemSearchRequest request,
+            @PageableDefault(size = 20, sort = "updatedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        Page<ItemResponse> items = itemService.search(request, pageable);
+        return ResponseEntity.ok(ApiResponse.success("Items searched successfully", items));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_VIEW')")

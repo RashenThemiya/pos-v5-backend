@@ -1,5 +1,6 @@
 package com.pos.system.service;
 
+import com.pos.system.dto.item.ItemSearchRequest;
 import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
@@ -9,12 +10,18 @@ import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.repository.*;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
@@ -85,6 +92,24 @@ public class ItemService {
                 .stream()
                 .map(this::toResponse)
                 .collect(Collectors.toList());
+    }
+
+    public Page<ItemResponse> search(ItemSearchRequest request, Pageable pageable) {
+        if (request.getBranchId() != null) {
+            validateBranch(request.getBranchId());
+        }
+
+        Specification<Item> specification = (root, query, cb) -> cb.conjunction();
+
+        if (request.getBranchId() != null) {
+            specification = specification.and((root, query, cb) -> cb.equal(root.get("branchId"), request.getBranchId()));
+        }
+
+        if (StringUtils.hasText(request.getQ())) {
+            specification = specification.and(buildSearchSpecification(request.getBranchId(), request.getQ()));
+        }
+
+        return itemRepository.findAll(specification, pageable).map(this::toResponse);
     }
 
     public ItemResponse getById(Long id) {
@@ -517,6 +542,60 @@ public class ItemService {
 
         response.setUnits(units);
         return response;
+    }
+
+    private Specification<Item> buildSearchSpecification(Long branchId, String queryText) {
+        String trimmed = queryText.trim();
+        String like = "%" + trimmed.toLowerCase() + "%";
+
+        return (root, query, cb) -> {
+            Set<Long> matchingItemIds = new HashSet<>(itemUnitRepository.findDistinctItemIdsByBranchIdAndBarcodeLike(branchId, trimmed));
+
+            if (branchId != null) {
+                matchingItemIds.addAll(findMatchingItemIdsByText(branchId, trimmed));
+            }
+
+            Specification<Item> textSpecification = (textRoot, textQuery, textCb) -> textCb.or(
+                    textCb.like(textCb.lower(textRoot.get("sku")), like),
+                    textCb.like(textCb.lower(textRoot.get("name")), like),
+                    textCb.like(textCb.lower(textRoot.get("scaleBarcodePrefix")), like)
+            );
+
+            if (isNumeric(trimmed)) {
+                Long itemId = Long.valueOf(trimmed);
+                textSpecification = textSpecification.or((textRoot, textQuery, textCb) -> textCb.equal(textRoot.get("itemId"), itemId));
+            }
+
+            if (!matchingItemIds.isEmpty()) {
+                Specification<Item> barcodeSpecification = (textRoot, textQuery, textCb) -> textRoot.get("itemId").in(matchingItemIds);
+                textSpecification = textSpecification.or(barcodeSpecification);
+            }
+
+            return textSpecification.toPredicate(root, query, cb);
+        };
+    }
+
+    private List<Long> findMatchingItemIdsByText(Long branchId, String queryText) {
+        String like = queryText.trim().toLowerCase();
+
+        return itemRepository.findAll((root, query, cb) -> cb.or(
+                        cb.like(cb.lower(root.get("sku")), "%" + like + "%"),
+                        cb.like(cb.lower(root.get("name")), "%" + like + "%"),
+                        cb.like(cb.lower(root.get("scaleBarcodePrefix")), "%" + like + "%")
+                ))
+                .stream()
+                .filter(item -> branchId == null || branchId.equals(item.getBranchId()))
+                .map(Item::getItemId)
+                .collect(Collectors.toList());
+    }
+
+    private boolean isNumeric(String value) {
+        try {
+            Long.parseLong(value);
+            return true;
+        } catch (NumberFormatException ex) {
+            return false;
+        }
     }
 
     private ItemUnitResponse toUnitResponse(ItemUnit unit) {

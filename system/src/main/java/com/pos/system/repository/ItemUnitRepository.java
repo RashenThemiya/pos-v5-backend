@@ -1,6 +1,8 @@
 package com.pos.system.repository;
 
 import com.pos.system.model.catalog.ItemUnit;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
@@ -22,4 +24,7 @@ public interface ItemUnitRepository extends JpaRepository<ItemUnit, Long> {
     List<ItemUnit> findByItemIdAndIsActiveTrue(Long itemId);
 
     Optional<ItemUnit> findByBranchIdAndBarcodeAndIsActiveTrue(Long branchId, String barcode);
+
+    @Query("select distinct iu.itemId from ItemUnit iu where (:branchId is null or iu.branchId = :branchId) and iu.barcode is not null and lower(iu.barcode) like lower(concat('%', :barcode, '%'))")
+    List<Long> findDistinctItemIdsByBranchIdAndBarcodeLike(@Param("branchId") Long branchId, @Param("barcode") String barcode);
 }
