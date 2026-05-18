@@ -27,6 +27,8 @@ public class PurchaseReturn {
     private Long supplyId;
     private LocalDateTime returnDate;
     private String refundMethod;
+    private Long cashSessionId;
+    private String bankReference;
     private BigDecimal refundAmount;
     private String reason;
 

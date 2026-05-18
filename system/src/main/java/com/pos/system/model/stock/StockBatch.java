@@ -43,6 +43,15 @@ public class StockBatch {
     @Column(nullable = false, precision = 14, scale = 4)
     private BigDecimal qtyRemaining;
 
+    @Column(precision = 14, scale = 4)
+    private BigDecimal availableQty = BigDecimal.ZERO;
+
+    @Column(precision = 14, scale = 4)
+    private BigDecimal damagedQty = BigDecimal.ZERO;
+
+    @Column(precision = 14, scale = 4)
+    private BigDecimal expiredQty = BigDecimal.ZERO;
+
     @Column(nullable = false, length = 120)
     private String internalBatchBarcode;
 

@@ -646,9 +646,6 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         }
 
         supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(payment.getAmount()));
-        if (supplier.getBalance().compareTo(BigDecimal.ZERO) < 0) {
-            supplier.setBalance(BigDecimal.ZERO);
-        }
         supplier.setUpdatedAt(LocalDateTime.now());
         supplierRepository.save(supplier);
 
@@ -752,15 +749,9 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                     s.setBranchId(supply.getBranchId());
                     s.setItemId(product.getItemId());
                     s.setUnitId(baseUnit.getUnitId());
-                    s.setAvailableQty(BigDecimal.ZERO);
-                    s.setDamagedQty(BigDecimal.ZERO);
-                    s.setExpiredQty(BigDecimal.ZERO);
                     return s;
                 });
 
-        stock.setAvailableQty(nvlQty(stock.getAvailableQty()).add(nvlQty(product.getQuantityReceivedBase())));
-        stock.setDamagedQty(nvlQty(stock.getDamagedQty()).add(nvlQty(product.getQtyDamaged())));
-        stock.setExpiredQty(nvlQty(stock.getExpiredQty()).add(nvlQty(product.getQtyExpired())));
         stock.setLastUpdated(LocalDateTime.now());
         stockRepository.save(stock);
 
@@ -772,6 +763,9 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         batch.setReceivedQty(product.getQuantityReceived());
         batch.setReceivedBaseQty(product.getQuantityReceivedBase());
         batch.setQtyRemaining(product.getQtyRemaining());
+        batch.setAvailableQty(product.getQtyRemaining());
+        batch.setDamagedQty(nvlQty(product.getQtyDamaged()));
+        batch.setExpiredQty(nvlQty(product.getQtyExpired()));
         batch.setInternalBatchBarcode(product.getInternalBatchBarcode());
         batch.setBatchNo(product.getBatchNo());
         batch.setSupplierBatchBarcode(product.getSupplierBatchBarcode());
@@ -983,11 +977,35 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
     BigDecimal calculatedRefundAmount = BigDecimal.ZERO;
 
     PurchaseReturn purchaseReturn = new PurchaseReturn();
+    String refundMethod = dto.getRefundMethod() != null ? dto.getRefundMethod() : "BALANCE_ADJUSTMENT";
+    Long cashSessionId = null;
+
+    if (isBankRefundMethod(refundMethod) && isBlank(dto.getBankReference())) {
+        throw new RuntimeException("Bank reference is required for bank refund");
+    }
+
+    if (isCashRefundMethod(refundMethod)) {
+        if (dto.getCashSessionId() == null) {
+            throw new RuntimeException("Cash session is required for cash refund");
+        }
+
+        CashSession cashSession = cashSessionRepository.findById(dto.getCashSessionId())
+                .orElseThrow(() -> new RuntimeException("Cash session not found"));
+
+        if (!"OPEN".equalsIgnoreCase(cashSession.getStatus())) {
+            throw new RuntimeException("Cash session is not OPEN");
+        }
+
+        cashSessionId = cashSession.getSessionId();
+    }
+
     purchaseReturn.setBranchId(dto.getBranchId());
     purchaseReturn.setSupplierId(dto.getSupplierId());
     purchaseReturn.setSupplyId(dto.getSupplyId());
     purchaseReturn.setReturnDate(dto.getReturnDate() != null ? dto.getReturnDate() : LocalDateTime.now());
-    purchaseReturn.setRefundMethod(dto.getRefundMethod() != null ? dto.getRefundMethod() : "BALANCE_ADJUSTMENT");
+    purchaseReturn.setRefundMethod(refundMethod);
+    purchaseReturn.setCashSessionId(cashSessionId);
+    purchaseReturn.setBankReference(clean(dto.getBankReference()));
     purchaseReturn.setRefundAmount(BigDecimal.ZERO);
     purchaseReturn.setReason(dto.getReason());
     purchaseReturn.setProcessedBy(processedBy);
@@ -1036,11 +1054,6 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
     if ("COMPLETED".equalsIgnoreCase(savedReturn.getStatus())) {
 
         supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(refundAmount));
-
-        if (supplier.getBalance().compareTo(BigDecimal.ZERO) < 0) {
-            supplier.setBalance(BigDecimal.ZERO);
-        }
-
         supplier.setUpdatedAt(LocalDateTime.now());
         supplierRepository.save(supplier);
 
@@ -1051,10 +1064,23 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
         txn.setAmount(refundAmount);
         txn.setRefTable("purchase_returns");
         txn.setRefId(savedReturn.getPurchaseReturnId());
-        txn.setNote("Purchase return processed");
+        txn.setNote(buildPurchaseReturnTxnNote(savedReturn));
         txn.setCreatedBy(processedBy);
         txn.setCreatedAt(LocalDateTime.now());
         supplierBalanceTransactionRepository.save(txn);
+
+        if (isCashRefundMethod(savedReturn.getRefundMethod())) {
+            CashSessionTransaction cashTxn = new CashSessionTransaction();
+            cashTxn.setSessionId(savedReturn.getCashSessionId());
+            cashTxn.setType("SUPPLIER_REFUND_IN");
+            cashTxn.setAmount(refundAmount);
+            cashTxn.setPaymentMethod("CASH");
+            cashTxn.setPurchaseReturnId(savedReturn.getPurchaseReturnId());
+            cashTxn.setNote("Supplier cash refund: " + supplier.getName());
+            cashTxn.setCreatedBy(processedBy);
+            cashTxn.setCreatedAt(LocalDateTime.now());
+            cashSessionTransactionRepository.save(cashTxn);
+        }
 
         if (dto.getSupplyId() != null) {
             Supply supply = supplyRepository.findById(dto.getSupplyId())
@@ -1160,24 +1186,21 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
 
     switch (type) {
         case "DAMAGED" -> {
-            if (nvlQty(stock.getDamagedQty()).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.DAMAGED).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough damaged stock to return");
             }
-            stock.setDamagedQty(nvlQty(stock.getDamagedQty()).subtract(qtyBase));
         }
 
         case "EXPIRED" -> {
-            if (nvlQty(stock.getExpiredQty()).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.EXPIRED).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough expired stock to return");
             }
-            stock.setExpiredQty(nvlQty(stock.getExpiredQty()).subtract(qtyBase));
         }
 
         default -> {
-            if (nvlQty(stock.getAvailableQty()).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.AVAILABLE).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough available stock to return");
             }
-            stock.setAvailableQty(nvlQty(stock.getAvailableQty()).subtract(qtyBase));
         }
     }
 
@@ -1189,12 +1212,27 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .findByBranchIdAndInternalBatchBarcode(dto.getBranchId(), itemDto.getInternalBatchBarcode())
                 .orElseThrow(() -> new RuntimeException("Stock batch not found"));
 
-        if (nvlQty(batch.getQtyRemaining()).compareTo(qtyBase) < 0) {
-            throw new RuntimeException("Not enough batch quantity to return");
+        BigDecimal batchQty = switch (type) {
+            case "DAMAGED" -> nvlQty(batch.getDamagedQty());
+            case "EXPIRED" -> nvlQty(batch.getExpiredQty());
+            default -> nvlQty(batch.getAvailableQty());
+        };
+
+        if (batchQty.compareTo(qtyBase) < 0) {
+            throw new RuntimeException("Not enough batch " + type.toLowerCase() + " quantity to return");
         }
 
-        batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+        switch (type) {
+            case "DAMAGED" -> batch.setDamagedQty(nvlQty(batch.getDamagedQty()).subtract(qtyBase));
+            case "EXPIRED" -> batch.setExpiredQty(nvlQty(batch.getExpiredQty()).subtract(qtyBase));
+            default -> {
+                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(qtyBase));
+                batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(qtyBase));
+            }
+        }
         stockBatchRepository.save(batch);
+    } else {
+        deductBatchQtyFifo(dto.getBranchId(), itemDto.getItemId(), qtyBase, type);
     }
 
     StockMovement movement = new StockMovement();
@@ -1286,8 +1324,90 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
         return value != null ? value : BigDecimal.ZERO;
     }
 
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
+        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream()
+                .map(batch -> switch (type) {
+                    case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
+                    case DAMAGED -> nvlQty(batch.getDamagedQty());
+                    case EXPIRED -> nvlQty(batch.getExpiredQty());
+                })
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private void deductBatchQtyFifo(Long branchId, Long itemId, BigDecimal qtyBase, String type) {
+        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(branchId, itemId);
+        java.util.Collections.reverse(batches);
+
+        BigDecimal remaining = qtyBase;
+        for (StockBatch batch : batches) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) {
+                break;
+            }
+
+            BigDecimal batchQty = switch (type) {
+                case "DAMAGED" -> nvlQty(batch.getDamagedQty());
+                case "EXPIRED" -> nvlQty(batch.getExpiredQty());
+                default -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
+            };
+            if (batchQty.compareTo(BigDecimal.ZERO) <= 0) {
+                continue;
+            }
+
+            BigDecimal deduct = remaining.min(batchQty);
+            switch (type) {
+                case "DAMAGED" -> batch.setDamagedQty(nvlQty(batch.getDamagedQty()).subtract(deduct));
+                case "EXPIRED" -> batch.setExpiredQty(nvlQty(batch.getExpiredQty()).subtract(deduct));
+                default -> {
+                    batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(deduct));
+                    batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).subtract(deduct));
+                }
+            }
+            stockBatchRepository.save(batch);
+            remaining = remaining.subtract(deduct);
+        }
+    }
+
+    private enum StockQtyType {
+        AVAILABLE,
+        DAMAGED,
+        EXPIRED
+    }
+
     private String safe(String value) {
         return value == null ? "" : value.trim();
+    }
+
+    private String clean(String value) {
+        return isBlank(value) ? null : value.trim();
+    }
+
+    private boolean isBlank(String value) {
+        return value == null || value.trim().isEmpty();
+    }
+
+    private boolean isBankRefundMethod(String refundMethod) {
+        if (refundMethod == null) {
+            return false;
+        }
+        String normalized = refundMethod.trim().toUpperCase();
+        return "BANK_TRANSFER".equals(normalized) || "BANK_REFUND".equals(normalized);
+    }
+
+    private boolean isCashRefundMethod(String refundMethod) {
+        if (refundMethod == null) {
+            return false;
+        }
+        String normalized = refundMethod.trim().toUpperCase();
+        return "CASH".equals(normalized) || "CASH_REFUND".equals(normalized) || "COUNTER_CASH".equals(normalized);
+    }
+
+    private String buildPurchaseReturnTxnNote(PurchaseReturn purchaseReturn) {
+        String note = "Purchase return processed";
+        if (isBankRefundMethod(purchaseReturn.getRefundMethod()) && !isBlank(purchaseReturn.getBankReference())) {
+            note += " - Bank reference: " + purchaseReturn.getBankReference().trim();
+        }
+        return note;
     }
 
     private PurchaseReturnResponseDto mapPurchaseReturn(
@@ -1301,6 +1421,8 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
             .supplyId(purchaseReturn.getSupplyId())
             .returnDate(purchaseReturn.getReturnDate())
             .refundMethod(purchaseReturn.getRefundMethod())
+            .cashSessionId(purchaseReturn.getCashSessionId())
+            .bankReference(purchaseReturn.getBankReference())
             .refundAmount(purchaseReturn.getRefundAmount())
             .reason(purchaseReturn.getReason())
             .processedBy(purchaseReturn.getProcessedBy())

@@ -53,6 +53,14 @@ public class SalesController {
         return ResponseEntity.ok(salesService.getOrdersByBranch(branchId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
+    @GetMapping("/search-products/branch/{branchId}")
+    public ResponseEntity<List<SaleProductSearchResponse>> searchProductsForSale(
+            @PathVariable Long branchId,
+            @RequestParam("q") String query) {
+        return ResponseEntity.ok(salesService.searchProductsForSale(branchId, query));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
     @GetMapping("/orders/branch/{branchId}/session/{sessionId}")
     public ResponseEntity<List<OrderResponse>> getOrdersBySession(@PathVariable Long branchId,
