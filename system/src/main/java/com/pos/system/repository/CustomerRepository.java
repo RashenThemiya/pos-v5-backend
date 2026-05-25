@@ -1,6 +1,7 @@
 package com.pos.system.repository;
 
 import com.pos.system.model.customer.Customer;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -27,5 +28,6 @@ public interface CustomerRepository extends JpaRepository<Customer, Long> {
     boolean existsByPhoneAndBranchId(String phone, Long branchId);
   
     Page<Customer> findByBranchId(Long branchId, Pageable pageable);
-   
+
+    Page<Customer> findAll(Specification<Customer> specification, Pageable pageable);
 }

@@ -1,5 +1,6 @@
 package com.pos.system.service;
 
+import com.pos.system.dto.customer.CustomerSearchRequest;
 import com.pos.system.dto.customer.CustomerRequest;
 import com.pos.system.model.auth.Authorization;
 import com.pos.system.model.customer.Customer;
@@ -12,10 +13,12 @@ import com.pos.system.repository.LoyaltyTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -95,6 +98,16 @@ public class CustomerService {
 
     public Page<Customer> getAll(Pageable pageable) {
         return customerRepository.findAll(pageable);
+    }
+
+    public Page<Customer> search(CustomerSearchRequest request, Pageable pageable) {
+        Specification<Customer> specification = (root, query, cb) -> cb.conjunction();
+
+        if (StringUtils.hasText(request.getQ())) {
+            specification = specification.and(buildSearchSpecification(request.getQ()));
+        }
+
+        return customerRepository.findAll(specification, pageable);
     }
 
     public Customer searchByPhone(String phone) {
@@ -236,5 +249,18 @@ public class CustomerService {
         }
         
         return 1L; // Fallback for testing (remove in production)
+    }
+
+    private Specification<Customer> buildSearchSpecification(String queryText) {
+        String like = likePattern(queryText);
+        return (root, query, cb) -> cb.or(
+                cb.like(cb.lower(root.get("phone")), like),
+                cb.like(cb.lower(root.get("nic")), like),
+                cb.like(cb.lower(root.get("loyaltyCardNo")), like)
+        );
+    }
+
+    private String likePattern(String value) {
+        return "%" + value.trim().toLowerCase() + "%";
     }
 }

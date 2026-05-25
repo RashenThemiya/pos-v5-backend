@@ -1,5 +1,6 @@
 package com.pos.system.controller;
 
+import com.pos.system.dto.customer.CustomerSearchRequest;
 import com.pos.system.dto.common.ApiResponse;
 import com.pos.system.dto.customer.*;
 import com.pos.system.model.customer.Customer;
@@ -8,7 +9,9 @@ import com.pos.system.model.customer.LoyaltyTransaction;
 import com.pos.system.service.CustomerService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -63,6 +66,16 @@ public class CustomerController {
     @GetMapping("/search")
     public ResponseEntity<ApiResponse<CustomerResponse>> searchByPhone(@RequestParam String phone) {
         return ResponseEntity.ok(ApiResponse.success("Customer fetched successfully", toResponse(customerService.searchByPhone(phone))));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_VIEW')")
+    @GetMapping("/search/advanced")
+    public ResponseEntity<ApiResponse<Page<CustomerResponse>>> searchAdvanced(
+            @ModelAttribute CustomerSearchRequest request,
+            @PageableDefault(size = 20, sort = "updatedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        Page<CustomerResponse> customers = customerService.search(request, pageable)
+                .map(this::toResponse);
+        return ResponseEntity.ok(ApiResponse.success("Customers searched successfully", customers));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_UPDATE')")
