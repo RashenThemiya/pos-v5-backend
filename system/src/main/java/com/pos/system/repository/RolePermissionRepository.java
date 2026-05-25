@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.Optional;
 
 public interface RolePermissionRepository extends JpaRepository<RolePermission, Long> {
-    boolean existsByRoleIdAndPermissionId(Long roleId, Long permissionId);
+    boolean existsByRoleIdAndAuthorityCode(Long roleId, String authorityCode);
     List<RolePermission> findByRoleId(Long roleId);
-    Optional<RolePermission> findByRoleIdAndPermissionId(Long roleId, Long permissionId);
+    Optional<RolePermission> findByRoleIdAndAuthorityCode(Long roleId, String authorityCode);
+    void deleteByRoleId(Long roleId);
 }

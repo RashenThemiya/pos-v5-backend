@@ -24,7 +24,6 @@ public class UserService {
     private final RoleRepository roleRepository;
     private final UserRoleRepository userRoleRepository;
     private final RolePermissionRepository rolePermissionRepository;
-    private final PermissionRepository permissionRepository;
     private final PasswordEncoder passwordEncoder;
 
     public String create(CreateUserRequest request) {
@@ -284,7 +283,7 @@ public class UserService {
 
         if (auth.getType() == AuthorizationType.SUPERADMIN) {
             return List.of(new UserPermissionResponse(
-                    0L,
+                    null,
                     "ALL_PRIVILEGES",
                     "Superadmin full system access",
                     "SYSTEM"
@@ -293,28 +292,26 @@ public class UserService {
 
         List<UserRole> userRoles = userRoleRepository.findByUserId(userId);
 
-        Set<Long> permissionIds = new HashSet<>();
+        Set<String> authorityCodes = new TreeSet<>();
 
         for (UserRole userRole : userRoles) {
             List<RolePermission> rolePermissions =
                     rolePermissionRepository.findByRoleId(userRole.getRoleId());
 
             for (RolePermission rolePermission : rolePermissions) {
-                permissionIds.add(rolePermission.getPermissionId());
+                authorityCodes.add(rolePermission.getAuthorityCode());
             }
         }
 
         List<UserPermissionResponse> result = new ArrayList<>();
 
-        for (Long permissionId : permissionIds) {
-            permissionRepository.findById(permissionId).ifPresent(permission -> {
-                result.add(new UserPermissionResponse(
-                        permission.getPermissionId(),
-                        permission.getCode(),
-                        permission.getDescription(),
-                        permission.getModule()
-                ));
-            });
+        for (String authorityCode : authorityCodes) {
+            result.add(new UserPermissionResponse(
+                    null,
+                    authorityCode,
+                    toLabel(authorityCode),
+                    getModule(authorityCode)
+            ));
         }
 
         return result;
@@ -406,5 +403,31 @@ private List<String> getUserRoleNames(Long userId) {
             .filter(Objects::nonNull)
             .map(Role::getName)
             .toList();
+}
+
+private String getModule(String code) {
+    if ("ALL_PRIVILEGES".equals(code)) {
+        return "SYSTEM";
+    }
+
+    int separatorIndex = code.indexOf('_');
+    if (separatorIndex <= 0) {
+        return "OTHER";
+    }
+
+    return code.substring(0, separatorIndex);
+}
+
+private String toLabel(String code) {
+    String[] parts = code.toLowerCase().split("_");
+    List<String> labelParts = new ArrayList<>();
+
+    for (String part : parts) {
+        if (!part.isBlank()) {
+            labelParts.add(part.substring(0, 1).toUpperCase() + part.substring(1));
+        }
+    }
+
+    return String.join(" ", labelParts);
 }
 }

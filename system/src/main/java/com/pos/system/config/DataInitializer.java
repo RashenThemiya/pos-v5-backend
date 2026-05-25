@@ -33,6 +33,7 @@ public class DataInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) throws Exception {
         removeOldStockQuantityColumns();
+        migrateRolePermissionAuthorityCodes();
 
         // create default SUPERADMIN only when no auth records exist
         if (authorizationRepository.count() == 0) {
@@ -66,7 +67,48 @@ public class DataInitializer implements CommandLineRunner {
         dropColumnIfExists("stock", "expired_qty");
     }
 
+    private void migrateRolePermissionAuthorityCodes() {
+        if (!columnExists("role_permissions", "permission_id")
+                || !columnExists("role_permissions", "authority_code")
+                || !tableExists("permissions")) {
+            return;
+        }
+
+        jdbcTemplate.execute(
+                """
+                UPDATE role_permissions rp
+                JOIN permissions p ON p.permission_id = rp.permission_id
+                SET rp.authority_code = p.code
+                WHERE rp.authority_code IS NULL
+                """
+        );
+
+        dropColumnIfExists("role_permissions", "permission_id");
+    }
+
     private void dropColumnIfExists(String tableName, String columnName) {
+        if (columnExists(tableName, columnName)) {
+            jdbcTemplate.execute("ALTER TABLE " + tableName + " DROP COLUMN " + columnName);
+            System.out.println("Removed old column: " + tableName + "." + columnName);
+        }
+    }
+
+    private boolean tableExists(String tableName) {
+        Integer tableCount = jdbcTemplate.queryForObject(
+                """
+                SELECT COUNT(*)
+                FROM INFORMATION_SCHEMA.TABLES
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = ?
+                """,
+                Integer.class,
+                tableName
+        );
+
+        return tableCount != null && tableCount > 0;
+    }
+
+    private boolean columnExists(String tableName, String columnName) {
         Integer columnCount = jdbcTemplate.queryForObject(
                 """
                 SELECT COUNT(*)
@@ -80,10 +122,7 @@ public class DataInitializer implements CommandLineRunner {
                 columnName
         );
 
-        if (columnCount != null && columnCount > 0) {
-            jdbcTemplate.execute("ALTER TABLE " + tableName + " DROP COLUMN " + columnName);
-            System.out.println("Removed old column: " + tableName + "." + columnName);
-        }
+        return columnCount != null && columnCount > 0;
     }
 
     private void migrateStockUnitIds() {

@@ -6,6 +6,9 @@ import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleBarcodeSetting;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.promotion.Promotion;
+import com.pos.system.model.promotion.PromotionBatch;
+import com.pos.system.model.promotion.PromotionItem;
 import com.pos.system.model.sale.*;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
@@ -43,8 +46,40 @@ public class SalesServiceImpl implements SalesService {
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
     private final ItemUnitRepository itemUnitRepository;
     private final ItemRepository itemRepository;
+    private final ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
+    private final ScaleItemMappingRepository scaleItemMappingRepository;
+    private final PromotionRepository promotionRepository;
+    private final PromotionItemRepository promotionItemRepository;
+    private final PromotionBatchRepository promotionBatchRepository;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
+
+    @Override
+    public OrderResponse processSale(ProcessSaleRequest request) {
+        CreateOrderRequest orderRequest = new CreateOrderRequest();
+        orderRequest.setBranchId(request.getBranchId());
+        orderRequest.setUserId(request.getUserId());
+        orderRequest.setCustomerId(request.getCustomerId());
+        orderRequest.setCashSessionId(request.getCashSessionId());
+        orderRequest.setItems(request.getItems());
+        orderRequest.setDiscount(request.getDiscount());
+        orderRequest.setRounding(request.getRounding());
+        orderRequest.setNotes(request.getNotes());
+
+        OrderResponse order = createOrder(orderRequest);
+
+        if (request.getPayments() == null || request.getPayments().isEmpty()) {
+            return order;
+        }
+
+        PaymentRequest paymentRequest = new PaymentRequest();
+        paymentRequest.setReceivedBy(request.getUserId());
+        paymentRequest.setPayments(request.getPayments().stream()
+                .map(this::mapProcessSalePaymentLine)
+                .toList());
+
+        return processPayment(order.getOrderId(), paymentRequest);
+    }
 
     @Override
     public OrderResponse createOrder(CreateOrderRequest request) {
@@ -731,6 +766,16 @@ public class SalesServiceImpl implements SalesService {
             throw new RuntimeException("Scale barcode setting range is invalid for scanned barcode");
         }
         return value.substring(beginIndex, endIndex);
+    }
+
+    private PaymentRequest.PaymentLineDto mapProcessSalePaymentLine(ProcessSaleRequest.PaymentLineDto source) {
+        PaymentRequest.PaymentLineDto target = new PaymentRequest.PaymentLineDto();
+        target.setPaymentMethod(source.getPaymentMethod());
+        target.setAmount(source.getAmount());
+        target.setTenderedAmount(source.getTenderedAmount());
+        target.setReferenceNo(source.getReferenceNo());
+        target.setNote(source.getNote());
+        return target;
     }
 
     private String generateInvoiceNo(Long branchId) {
