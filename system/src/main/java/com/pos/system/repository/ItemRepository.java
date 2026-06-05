@@ -9,7 +9,10 @@ import java.util.List;
 import java.util.Optional;
 
 public interface ItemRepository extends JpaRepository<Item, Long>, JpaSpecificationExecutor<Item> {
+<<<<<<< HEAD
     // ... rest unchanged
+=======
+>>>>>>> e5c6a7a (fix)
     List<Item> findByBranchId(Long branchId);
     List<Item> findByBranchIdAndIsActive(Long branchId, Boolean isActive);
     List<Item> findByBranchIdAndCategoryId(Long branchId, Long categoryId);
