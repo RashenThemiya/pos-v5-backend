@@ -8,7 +8,8 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import java.util.List;
 import java.util.Optional;
 
-public interface ItemRepository extends JpaRepository<Item, Long> {
+public interface ItemRepository extends JpaRepository<Item, Long>, JpaSpecificationExecutor<Item> {
+    // ... rest unchanged
     List<Item> findByBranchId(Long branchId);
     List<Item> findByBranchIdAndIsActive(Long branchId, Boolean isActive);
     List<Item> findByBranchIdAndCategoryId(Long branchId, Long categoryId);
