@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Entity
 @Table(name = "role_permissions", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"role_id", "permission_id"})
+        @UniqueConstraint(columnNames = {"role_id", "authority_code"})
 })
 public class RolePermission {
     @Id
@@ -22,8 +22,8 @@ public class RolePermission {
     @Column(nullable = false)
     private Long roleId;
 
-    @Column(nullable = false)
-    private Long permissionId;
+    @Column(name = "authority_code", length = 100)
+    private String authorityCode;
 
     private LocalDateTime createdAt;
 }

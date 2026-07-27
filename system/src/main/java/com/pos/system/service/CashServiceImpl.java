@@ -255,9 +255,19 @@ public class CashServiceImpl implements CashService {
             throw new RuntimeException("Cannot add withdrawal to a closed session");
         }
 
+        BigDecimal amount = nvl(request.getAmount());
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Withdrawal amount must be greater than 0");
+        }
+
+        BigDecimal availableCash = calculateExpectedCash(request.getCashSessionId(), session.getOpeningCash());
+        if (amount.compareTo(availableCash) > 0) {
+            throw new RuntimeException("Withdrawal amount cannot exceed available cash");
+        }
+
         Withdrawal withdrawal = new Withdrawal();
         withdrawal.setCashSessionId(request.getCashSessionId());
-        withdrawal.setAmount(nvl(request.getAmount()));
+        withdrawal.setAmount(amount);
         withdrawal.setReason(request.getReason());
         withdrawal.setNotes(request.getNotes());
         withdrawal.setWithdrawalDate(request.getWithdrawalDate() != null ? request.getWithdrawalDate() : LocalDateTime.now());

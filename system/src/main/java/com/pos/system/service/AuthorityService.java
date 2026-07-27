@@ -33,6 +33,10 @@ public class AuthorityService {
     private final ApplicationContext applicationContext;
 
     public List<AuthorityGroupResponse> getAllAuthorities() {
+        return groupAuthorities(getAllAuthorityCodes());
+    }
+
+    public Set<String> getAllAuthorityCodes() {
         Set<String> authorityCodes = new TreeSet<>();
         authorityCodes.add(ALL_PRIVILEGES);
 
@@ -48,7 +52,7 @@ public class AuthorityService {
             collectAuthorities(controllerClass, authorityCodes);
         }
 
-        return groupAuthorities(authorityCodes);
+        return authorityCodes;
     }
 
     private void collectAuthorities(Class<?> controllerClass, Set<String> authorityCodes) {

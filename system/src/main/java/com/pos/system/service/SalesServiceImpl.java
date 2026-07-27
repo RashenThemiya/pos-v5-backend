@@ -55,6 +55,33 @@ public class SalesServiceImpl implements SalesService {
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
     @Override
+    public OrderResponse processSale(ProcessSaleRequest request) {
+        CreateOrderRequest orderRequest = new CreateOrderRequest();
+        orderRequest.setBranchId(request.getBranchId());
+        orderRequest.setUserId(request.getUserId());
+        orderRequest.setCustomerId(request.getCustomerId());
+        orderRequest.setCashSessionId(request.getCashSessionId());
+        orderRequest.setItems(request.getItems());
+        orderRequest.setDiscount(request.getDiscount());
+        orderRequest.setRounding(request.getRounding());
+        orderRequest.setNotes(request.getNotes());
+
+        OrderResponse order = createOrder(orderRequest);
+
+        if (request.getPayments() == null || request.getPayments().isEmpty()) {
+            return order;
+        }
+
+        PaymentRequest paymentRequest = new PaymentRequest();
+        paymentRequest.setReceivedBy(request.getUserId());
+        paymentRequest.setPayments(request.getPayments().stream()
+                .map(this::mapProcessSalePaymentLine)
+                .toList());
+
+        return processPayment(order.getOrderId(), paymentRequest);
+    }
+
+    @Override
     public OrderResponse createOrder(CreateOrderRequest request) {
         if (request.getItems() == null || request.getItems().isEmpty()) {
             throw new RuntimeException("Order must have at least one item");
@@ -744,6 +771,16 @@ public class SalesServiceImpl implements SalesService {
             throw new RuntimeException("Scale barcode setting range is invalid for scanned barcode");
         }
         return value.substring(beginIndex, endIndex);
+    }
+
+    private PaymentRequest.PaymentLineDto mapProcessSalePaymentLine(ProcessSaleRequest.PaymentLineDto source) {
+        PaymentRequest.PaymentLineDto target = new PaymentRequest.PaymentLineDto();
+        target.setPaymentMethod(source.getPaymentMethod());
+        target.setAmount(source.getAmount());
+        target.setTenderedAmount(source.getTenderedAmount());
+        target.setReferenceNo(source.getReferenceNo());
+        target.setNote(source.getNote());
+        return target;
     }
 
     private String generateInvoiceNo(Long branchId) {
