@@ -112,4 +112,22 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
             @Param("branchId") Long branchId,
             @Param("from")     LocalDateTime from,
             @Param("to")       LocalDateTime to);
+
+    /**
+     * Daily completed-order revenue for a branch in a period.
+     * Returns Object[] rows: [date, orderCount, grossRevenue]
+     */
+    @Query("SELECT FUNCTION('DATE', o.orderDate) AS salesDate, " +
+           "       COUNT(o) AS orderCount, " +
+           "       COALESCE(SUM(o.total), 0) AS grossRevenue " +
+           "FROM CustomerOrder o " +
+           "WHERE o.branchId = :branchId " +
+           "AND o.status = 'COMPLETED' " +
+           "AND o.orderDate BETWEEN :from AND :to " +
+           "GROUP BY FUNCTION('DATE', o.orderDate) " +
+           "ORDER BY FUNCTION('DATE', o.orderDate)")
+    List<Object[]> findDailySalesByBranchAndPeriod(
+            @Param("branchId") Long branchId,
+            @Param("from")     LocalDateTime from,
+            @Param("to")       LocalDateTime to);
 }

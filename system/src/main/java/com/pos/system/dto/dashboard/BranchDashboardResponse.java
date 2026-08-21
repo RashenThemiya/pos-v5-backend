@@ -6,6 +6,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -49,6 +50,8 @@ public class BranchDashboardResponse {
 
     // ── Payment Method Breakdown ──────────────────────────────────────────
     private List<PaymentMethodEntry> paymentBreakdown;
+
+    private List<DailySalesEntry> dailySales;
 
     // ─────────────────────────────────────────────────────────────────────
     // Nested summary classes
@@ -149,5 +152,16 @@ public class BranchDashboardResponse {
         private String paymentMethod;
         private long transactionCount;
         private BigDecimal totalAmount;
+    }
+
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    public static class DailySalesEntry {
+        private LocalDate date;
+        private String label;
+        private long orderCount;
+        private BigDecimal grossRevenue;
     }
 }
