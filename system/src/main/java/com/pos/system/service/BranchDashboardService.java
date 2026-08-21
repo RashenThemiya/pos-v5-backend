@@ -17,7 +17,11 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.sql.Date;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -36,6 +40,9 @@ public class BranchDashboardService {
     private final CustomerRepository          customerRepository;
     private final CounterRepository           counterRepository;
     private final CashSessionRepository       cashSessionRepository;
+
+    private static final DateTimeFormatter SALES_DAY_LABEL_FORMATTER =
+            DateTimeFormatter.ofPattern("MMM d");
 
     // ─── Public API ───────────────────────────────────────────────────────
 
@@ -64,6 +71,7 @@ public class BranchDashboardService {
                 .counters(buildCounterSummary(branchId))
                 .topItems(buildTopItems(branchId, from, to, 10))
                 .paymentBreakdown(buildPaymentBreakdown(branchId, from, to))
+                .dailySales(buildDailySales(branchId, from, to))
                 .build();
     }
 
@@ -302,5 +310,61 @@ public class BranchDashboardService {
                         .build())
                 .sorted((a, b) -> b.getTotalAmount().compareTo(a.getTotalAmount()))
                 .collect(Collectors.toList());
+    }
+
+    private List<DailySalesEntry> buildDailySales(Long branchId,
+                                                  LocalDateTime from,
+                                                  LocalDateTime to) {
+        LocalDate startDate = from.toLocalDate();
+        LocalDate endDate = to.toLocalDate();
+
+        Map<LocalDate, DailySalesEntry> byDate = new LinkedHashMap<>();
+        for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+            byDate.put(date, DailySalesEntry.builder()
+                    .date(date)
+                    .label(SALES_DAY_LABEL_FORMATTER.format(date))
+                    .orderCount(0)
+                    .grossRevenue(BigDecimal.ZERO)
+                    .build());
+        }
+
+        orderRepository.findDailySalesByBranchAndPeriod(branchId, from, to)
+                .forEach(row -> {
+                    LocalDate date = toLocalDate(row[0]);
+                    if (date == null) {
+                        return;
+                    }
+
+                    byDate.put(date, DailySalesEntry.builder()
+                            .date(date)
+                            .label(SALES_DAY_LABEL_FORMATTER.format(date))
+                            .orderCount(((Number) row[1]).longValue())
+                            .grossRevenue(row[2] instanceof BigDecimal
+                                    ? (BigDecimal) row[2]
+                                    : BigDecimal.valueOf(((Number) row[2]).doubleValue()))
+                            .build());
+                });
+
+        return List.copyOf(byDate.values());
+    }
+
+    private LocalDate toLocalDate(Object value) {
+        if (value instanceof LocalDate localDate) {
+            return localDate;
+        }
+
+        if (value instanceof Date date) {
+            return date.toLocalDate();
+        }
+
+        if (value instanceof java.util.Date date) {
+            return new Date(date.getTime()).toLocalDate();
+        }
+
+        if (value instanceof String text) {
+            return LocalDate.parse(text);
+        }
+
+        return null;
     }
 }
