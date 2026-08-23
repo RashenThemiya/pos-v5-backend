@@ -12,7 +12,7 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 @Entity
 @Table(name = "purchase_order_items", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"po_id", "item_id"})
+        @UniqueConstraint(columnNames = {"po_id", "item_id", "unit_id"})
 })
 public class PurchaseOrderItem {
     @Id
@@ -24,8 +24,10 @@ public class PurchaseOrderItem {
 
     @Column(nullable = false)
     private Long itemId;
-@Column(nullable = false)
-private Long unitId;
+
+    @Column(nullable = false)
+    private Long unitId;
+
     @Column(nullable = false)
     private BigDecimal orderedQty;
 

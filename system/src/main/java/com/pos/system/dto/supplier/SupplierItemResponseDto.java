@@ -21,6 +21,7 @@ public class SupplierItemResponseDto {
     private String sku;
 
     private Long unitId;
+    private String unitName;
 
     private BigDecimal lastPurchaseCost;
     private BigDecimal defaultCostPrice;
