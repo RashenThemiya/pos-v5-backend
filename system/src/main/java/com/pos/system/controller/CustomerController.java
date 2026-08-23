@@ -220,12 +220,22 @@ public class CustomerController {
         response.setCustomerId(transaction.getCustomerId());
         response.setType(transaction.getType());
         response.setAmount(transaction.getAmount());
+        response.setPreviousBalance(transaction.getPreviousBalance());
+        response.setNewBalance(transaction.getNewBalance());
         response.setRefTable(transaction.getRefTable());
         response.setRefId(transaction.getRefId());
         response.setNote(transaction.getNote());
         response.setCreatedBy(transaction.getCreatedBy());
+        response.setCreatedByName(resolveCreatedByName(transaction.getCreatedBy()));
         response.setCreatedAt(transaction.getCreatedAt());
         return response;
+    }
+
+    private String resolveCreatedByName(Long createdBy) {
+        if (createdBy == null) {
+            return null;
+        }
+        return customerService.findCreatedByName(createdBy);
     }
 
     private LoyaltyTransactionResponse toLoyaltyTransactionResponse(LoyaltyTransaction transaction) {

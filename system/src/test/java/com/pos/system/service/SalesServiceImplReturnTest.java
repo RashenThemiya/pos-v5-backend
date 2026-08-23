@@ -45,6 +45,7 @@ class SalesServiceImplReturnTest {
     @Mock private PromotionRepository promotionRepository;
     @Mock private PromotionItemRepository promotionItemRepository;
     @Mock private PromotionBatchRepository promotionBatchRepository;
+    @Mock private CustomerService customerService;
 
     private SalesServiceImpl salesService;
 
@@ -67,7 +68,8 @@ class SalesServiceImplReturnTest {
                 scaleItemMappingRepository,
                 promotionRepository,
                 promotionItemRepository,
-                promotionBatchRepository
+                promotionBatchRepository,
+                customerService
         );
     }
 
@@ -184,6 +186,40 @@ class SalesServiceImplReturnTest {
         assertThat(txn.getOrderId()).isEqualTo(1L);
         assertThat(txn.getInvoiceNo()).isEqualTo("INV-0001");
         assertThat(txn.getPaymentId()).isEqualTo(55L);
+    }
+
+    @Test
+    void processPayment_withCreditPayment_deductsCustomerBalance() {
+        CustomerOrder order = completedOrder();
+        order.setCustomerId(5L);
+        order.setPaymentStatus("UNPAID");
+        order.setTotal(new BigDecimal("125.00"));
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            if (p.getPaymentId() == null) p.setPaymentId(56L);
+            return p;
+        });
+        when(paymentRepository.findByOrderId(1L)).thenReturn(List.of());
+        when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of());
+
+        PaymentRequest.PaymentLineDto line = new PaymentRequest.PaymentLineDto();
+        line.setPaymentMethod("CREDIT");
+        line.setAmount(new BigDecimal("125.00"));
+
+        PaymentRequest request = new PaymentRequest();
+        request.setReceivedBy(7L);
+        request.setPayments(List.of(line));
+
+        salesService.processPayment(1L, request);
+
+        verify(customerService).recordCreditSale(
+                5L,
+                new BigDecimal("125.00"),
+                1L,
+                "INV-0001",
+                7L
+        );
     }
 
     @Test

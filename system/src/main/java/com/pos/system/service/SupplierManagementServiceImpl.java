@@ -15,11 +15,15 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.math.RoundingMode;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -245,7 +249,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             throw new RuntimeException("PO items cannot be empty");
         }
 
-        validateDuplicatePoItems(dto.getItems());
+        List<PurchaseOrderItemRequestDto> normalizedItems = normalizePurchaseOrderItems(dto.getItems());
 
         PurchaseOrder po = new PurchaseOrder();
         po.setBranchId(dto.getBranchId());
@@ -259,7 +263,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
         PurchaseOrder savedPo = purchaseOrderRepository.save(po);
 
-        for (PurchaseOrderItemRequestDto itemDto : dto.getItems()) {
+        for (PurchaseOrderItemRequestDto itemDto : normalizedItems) {
             validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
 
             validateSupplierProvidesItem(
@@ -277,7 +281,11 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             item.setReceivedQty(BigDecimal.ZERO);
             item.setUnitCostEst(nvlMoney(itemDto.getUnitCostEst()));
 
-            purchaseOrderItemRepository.save(item);
+            try {
+                purchaseOrderItemRepository.save(item);
+            } catch (DataIntegrityViolationException ex) {
+                throw new RuntimeException("Duplicate purchase order item/unit combination detected. If this uses an existing database, restart once so the PO item unique index can be repaired.", ex);
+            }
         }
 
         return getPurchaseOrderById(savedPo.getPoId());
@@ -300,6 +308,9 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                         .unitCostEst(item.getUnitCostEst())
                         .build())
                 .toList();
+        BigDecimal totalAmount = items.stream()
+                .map(item -> nvlQty(item.getOrderedQty()).multiply(nvlMoney(item.getUnitCostEst())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return PurchaseOrderResponseDto.builder()
                 .poId(po.getPoId())
@@ -311,6 +322,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .createdBy(po.getCreatedBy())
                 .createdAt(po.getCreatedAt())
                 .note(po.getNote())
+                .totalAmount(totalAmount)
                 .items(items)
                 .build();
     }
@@ -390,7 +402,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             BigDecimal qtyReceived = nvlQty(p.getQuantityReceived());
             BigDecimal qtyBase = unitConversionService.toBaseQty(p.getItemId(), p.getUnitId(), qtyReceived);
             BigDecimal costPrice = nvlMoney(p.getCostPrice());
-            BigDecimal lineTotal = p.getLineTotal() != null ? p.getLineTotal() : costPrice.multiply(qtyReceived);
+            BigDecimal lineTotal = resolveSupplyRequestLineTotal(p, qtyReceived, costPrice);
 
             SupplyProduct product = new SupplyProduct();
             product.setSupplyId(savedSupply.getSupplyId());
@@ -431,7 +443,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         BigDecimal taxAmount = nvlMoney(dto.getTaxAmount());
         BigDecimal rounding = nvlMoney(dto.getRounding());
 
-        BigDecimal finalTotal = dto.getTotal() != null
+        BigDecimal finalTotal = dto.getTotal() != null && dto.getTotal().compareTo(BigDecimal.ZERO) > 0
                 ? dto.getTotal()
                 : calculatedSubtotal.subtract(discount).add(taxAmount).add(rounding);
 
@@ -478,7 +490,29 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         Supply supply = supplyRepository.findById(supplyId)
                 .orElseThrow(() -> new RuntimeException("Supply not found"));
 
-        List<SupplyProductResponseDto> products = supplyProductRepository.findBySupplyId(supplyId)
+        List<SupplyProduct> supplyProducts = supplyProductRepository.findBySupplyId(supplyId);
+        BigDecimal calculatedSubtotal = supplyProducts.stream()
+                .map(this::calculateSupplyProductLineTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal responseSubtotal = resolveStoredOrCalculatedMoney(supply.getSubtotal(), calculatedSubtotal);
+        BigDecimal responseTotal = resolveStoredOrCalculatedMoney(
+                supply.getTotal(),
+                responseSubtotal
+                        .subtract(nvlMoney(supply.getDiscount()))
+                        .add(nvlMoney(supply.getTaxAmount()))
+                        .add(nvlMoney(supply.getRounding()))
+        );
+        BigDecimal responsePayable = resolveStoredOrCalculatedMoney(supply.getPayableAmount(), responseTotal);
+        BigDecimal responsePaid = nvlMoney(supply.getPaidAmount());
+        BigDecimal responseBalance = resolveStoredOrCalculatedMoney(
+                supply.getBalanceAmount(),
+                responsePayable.subtract(responsePaid)
+        );
+        String responsePaymentStatus = responseTotal.compareTo(BigDecimal.ZERO) > 0
+                ? resolvePaymentStatus(responsePayable, responsePaid)
+                : supply.getPaymentStatus();
+
+        List<SupplyProductResponseDto> products = supplyProducts
                 .stream()
                 .map(product -> SupplyProductResponseDto.builder()
                         .supplyProductId(product.getSupplyProductId())
@@ -509,15 +543,15 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .poId(supply.getPoId())
                 .grnNo(supply.getGrnNo())
                 .invoiceNo(supply.getInvoiceNo())
-                .subtotal(supply.getSubtotal())
+                .subtotal(responseSubtotal)
                 .discount(supply.getDiscount())
                 .taxAmount(supply.getTaxAmount())
                 .rounding(supply.getRounding())
-                .total(supply.getTotal())
-                .paidAmount(supply.getPaidAmount())
-                .payableAmount(supply.getPayableAmount())
-                .balanceAmount(supply.getBalanceAmount())
-                .paymentStatus(supply.getPaymentStatus())
+                .total(responseTotal)
+                .paidAmount(responsePaid)
+                .payableAmount(responsePayable)
+                .balanceAmount(responseBalance)
+                .paymentStatus(responsePaymentStatus)
                 .paymentMethod(supply.getPaymentMethod())
                 .status(supply.getStatus())
                 .supplyDate(supply.getSupplyDate())
@@ -609,7 +643,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             }
 
             BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(dto.getAmount());
-            BigDecimal total = nvlMoney(supply.getTotal());
+            BigDecimal total = calculateSupplyTotal(supply);
 
             if (newPaid.compareTo(total) > 0) {
                 throw new RuntimeException("Payment amount exceeds supply balance");
@@ -873,16 +907,90 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .orElse(null);
     }
 
-    private void validateDuplicatePoItems(List<PurchaseOrderItemRequestDto> items) {
-        Set<String> keys = new HashSet<>();
+    private List<PurchaseOrderItemRequestDto> normalizePurchaseOrderItems(List<PurchaseOrderItemRequestDto> items) {
+        Map<String, PurchaseOrderItemRequestDto> mergedItems = new LinkedHashMap<>();
+        Map<String, BigDecimal> mergedLineTotals = new LinkedHashMap<>();
 
         for (PurchaseOrderItemRequestDto item : items) {
-            String key = item.getItemId() + "-" + item.getUnitId();
-
-            if (!keys.add(key)) {
-                throw new RuntimeException("Duplicate PO item found for itemId/unitId: " + key);
+            if (item.getItemId() == null || item.getUnitId() == null) {
+                throw new RuntimeException("PO item and unit are required");
             }
+
+            String key = item.getItemId() + "-" + item.getUnitId();
+            BigDecimal qty = nvlQty(item.getOrderedQty());
+            BigDecimal unitCost = nvlMoney(item.getUnitCostEst());
+            BigDecimal lineTotal = qty.multiply(unitCost);
+
+            PurchaseOrderItemRequestDto existing = mergedItems.get(key);
+            if (existing == null) {
+                PurchaseOrderItemRequestDto copy = new PurchaseOrderItemRequestDto();
+                copy.setItemId(item.getItemId());
+                copy.setUnitId(item.getUnitId());
+                copy.setOrderedQty(qty);
+                copy.setUnitCostEst(unitCost);
+                mergedItems.put(key, copy);
+                mergedLineTotals.put(key, lineTotal);
+                continue;
+            }
+
+            BigDecimal mergedQty = nvlQty(existing.getOrderedQty()).add(qty);
+            BigDecimal mergedLineTotal = mergedLineTotals.get(key).add(lineTotal);
+
+            existing.setOrderedQty(mergedQty);
+            existing.setUnitCostEst(mergedQty.compareTo(BigDecimal.ZERO) > 0
+                    ? mergedLineTotal.divide(mergedQty, 4, RoundingMode.HALF_UP)
+                    : unitCost);
+            mergedLineTotals.put(key, mergedLineTotal);
         }
+
+        return new ArrayList<>(mergedItems.values());
+    }
+
+    private BigDecimal resolveSupplyRequestLineTotal(
+            SupplyProductRequestDto product,
+            BigDecimal qtyReceived,
+            BigDecimal costPrice
+    ) {
+        if (product.getLineTotal() != null && product.getLineTotal().compareTo(BigDecimal.ZERO) > 0) {
+            return product.getLineTotal();
+        }
+
+        return costPrice.multiply(qtyReceived);
+    }
+
+    private BigDecimal calculateSupplyTotal(Supply supply) {
+        BigDecimal storedTotal = nvlMoney(supply.getTotal());
+        if (storedTotal.compareTo(BigDecimal.ZERO) > 0) {
+            return storedTotal;
+        }
+
+        BigDecimal calculatedSubtotal = supplyProductRepository.findBySupplyId(supply.getSupplyId())
+                .stream()
+                .map(this::calculateSupplyProductLineTotal)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return calculatedSubtotal
+                .subtract(nvlMoney(supply.getDiscount()))
+                .add(nvlMoney(supply.getTaxAmount()))
+                .add(nvlMoney(supply.getRounding()));
+    }
+
+    private BigDecimal calculateSupplyProductLineTotal(SupplyProduct product) {
+        BigDecimal storedLineTotal = nvlMoney(product.getLineTotal());
+        if (storedLineTotal.compareTo(BigDecimal.ZERO) > 0) {
+            return storedLineTotal;
+        }
+
+        return nvlMoney(product.getCostPrice()).multiply(nvlQty(product.getQuantityReceived()));
+    }
+
+    private BigDecimal resolveStoredOrCalculatedMoney(BigDecimal stored, BigDecimal calculated) {
+        BigDecimal storedMoney = nvlMoney(stored);
+        if (storedMoney.compareTo(BigDecimal.ZERO) > 0) {
+            return storedMoney;
+        }
+
+        return nvlMoney(calculated);
     }
 
     private void validateDuplicateSupplyLines(List<SupplyProductRequestDto> products) {
@@ -1276,6 +1384,9 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
 
     private SupplierItemResponseDto mapSupplierItem(SupplierItem supplierItem) {
         Item item = itemRepository.findById(supplierItem.getItemId()).orElse(null);
+        ItemUnit unit = itemUnitRepository
+                .findByItemIdAndUnitIdAndIsActiveTrue(supplierItem.getItemId(), supplierItem.getUnitId())
+                .orElse(null);
         Supplier supplier = supplierRepository.findById(supplierItem.getSupplierId()).orElse(null);
 
         return SupplierItemResponseDto.builder()
@@ -1287,6 +1398,7 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .itemName(item != null ? item.getName() : null)
                 .sku(item != null ? item.getSku() : null)
                 .unitId(supplierItem.getUnitId())
+                .unitName(unit != null ? unit.getUnitName() : null)
                 .lastPurchaseCost(supplierItem.getLastPurchaseCost())
                 .defaultCostPrice(supplierItem.getDefaultCostPrice())
                 .isPreferred(supplierItem.getIsPreferred())

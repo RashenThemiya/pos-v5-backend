@@ -51,6 +51,7 @@ public class SalesServiceImpl implements SalesService {
     private final PromotionRepository promotionRepository;
     private final PromotionItemRepository promotionItemRepository;
     private final PromotionBatchRepository promotionBatchRepository;
+    private final CustomerService customerService;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
@@ -280,6 +281,19 @@ public class SalesServiceImpl implements SalesService {
             Payment savedPayment = paymentRepository.save(payment);
 
             totalPaid = totalPaid.add(line.getAmount());
+
+            if ("CREDIT".equalsIgnoreCase(line.getPaymentMethod())) {
+                if (order.getCustomerId() == null) {
+                    throw new RuntimeException("Customer is required for credit payments");
+                }
+                customerService.recordCreditSale(
+                        order.getCustomerId(),
+                        line.getAmount(),
+                        order.getOrderId(),
+                        order.getInvoiceNo(),
+                        request.getReceivedBy()
+                );
+            }
 
             // write cash session transaction
             if (order.getCashSessionId() != null) {
