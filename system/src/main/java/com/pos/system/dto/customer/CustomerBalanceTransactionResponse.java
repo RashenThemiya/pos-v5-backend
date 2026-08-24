@@ -11,9 +11,12 @@ public class CustomerBalanceTransactionResponse {
     private Long customerId;
     private String type;
     private BigDecimal amount;
+    private BigDecimal previousBalance;
+    private BigDecimal newBalance;
     private String refTable;
     private Long refId;
     private String note;
     private Long createdBy;
+    private String createdByName;
     private LocalDateTime createdAt;
 }

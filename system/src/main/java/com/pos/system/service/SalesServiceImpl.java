@@ -51,6 +51,7 @@ public class SalesServiceImpl implements SalesService {
     private final PromotionRepository promotionRepository;
     private final PromotionItemRepository promotionItemRepository;
     private final PromotionBatchRepository promotionBatchRepository;
+    private final CustomerService customerService;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
@@ -281,6 +282,19 @@ public class SalesServiceImpl implements SalesService {
 
             totalPaid = totalPaid.add(line.getAmount());
 
+            if ("CREDIT".equalsIgnoreCase(line.getPaymentMethod())) {
+                if (order.getCustomerId() == null) {
+                    throw new RuntimeException("Customer is required for credit payments");
+                }
+                customerService.recordCreditSale(
+                        order.getCustomerId(),
+                        line.getAmount(),
+                        order.getOrderId(),
+                        order.getInvoiceNo(),
+                        request.getReceivedBy()
+                );
+            }
+
             // write cash session transaction
             if (order.getCashSessionId() != null) {
                 CashSessionTransaction txn = new CashSessionTransaction();
@@ -289,6 +303,8 @@ public class SalesServiceImpl implements SalesService {
                 txn.setAmount(line.getAmount());
                 txn.setPaymentMethod(line.getPaymentMethod());
                 txn.setPaymentId(savedPayment.getPaymentId());
+                txn.setOrderId(order.getOrderId());
+                txn.setInvoiceNo(order.getInvoiceNo());
                 txn.setNote("Invoice: " + order.getInvoiceNo());
                 txn.setCreatedBy(request.getReceivedBy());
                 txn.setCreatedAt(LocalDateTime.now());
@@ -372,6 +388,9 @@ public class SalesServiceImpl implements SalesService {
             txn.setType("REFUND");
             txn.setAmount(totalRefund);
             txn.setPaymentMethod("CASH");
+            txn.setOrderId(order.getOrderId());
+            txn.setInvoiceNo(order.getInvoiceNo());
+            txn.setSalesReturnId(savedReturn.getReturnId());
             txn.setNote("Return for invoice: " + order.getInvoiceNo());
             txn.setCreatedBy(request.getProcessedBy());
             txn.setCreatedAt(LocalDateTime.now());

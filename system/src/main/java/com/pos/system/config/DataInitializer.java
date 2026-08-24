@@ -34,6 +34,7 @@ public class DataInitializer implements CommandLineRunner {
     public void run(String... args) throws Exception {
         removeOldStockQuantityColumns();
         repairRolePermissionUniqueIndex();
+        repairPurchaseOrderItemUniqueIndex();
         migrateRolePermissionAuthorityCodes();
 
         // create default SUPERADMIN only when no auth records exist
@@ -103,6 +104,45 @@ public class DataInitializer implements CommandLineRunner {
                     """
             );
             System.out.println("Added unique index on role_permissions(role_id, authority_code)");
+        }
+    }
+
+    private void repairPurchaseOrderItemUniqueIndex() {
+        if (!tableExists("purchase_order_items")
+                || !columnExists("purchase_order_items", "po_id")
+                || !columnExists("purchase_order_items", "item_id")
+                || !columnExists("purchase_order_items", "unit_id")) {
+            return;
+        }
+
+        List<String> poItemOnlyUniqueIndexes = jdbcTemplate.queryForList(
+                """
+                SELECT INDEX_NAME
+                FROM INFORMATION_SCHEMA.STATISTICS
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'purchase_order_items'
+                  AND NON_UNIQUE = 0
+                  AND INDEX_NAME <> 'PRIMARY'
+                GROUP BY INDEX_NAME
+                HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) = 'po_id,item_id'
+                """,
+                String.class
+        );
+
+        for (String indexName : poItemOnlyUniqueIndexes) {
+            jdbcTemplate.execute("ALTER TABLE purchase_order_items DROP INDEX " + quoteIdentifier(indexName));
+            System.out.println("Removed wrong unique index on purchase_order_items(po_id, item_id): " + indexName);
+        }
+
+        if (!uniqueIndexExists("purchase_order_items", "po_id,item_id,unit_id")) {
+            jdbcTemplate.execute(
+                    """
+                    ALTER TABLE purchase_order_items
+                    ADD CONSTRAINT uk_purchase_order_item_unit
+                    UNIQUE (po_id, item_id, unit_id)
+                    """
+            );
+            System.out.println("Added unique index on purchase_order_items(po_id, item_id, unit_id)");
         }
     }
 
@@ -185,6 +225,10 @@ public class DataInitializer implements CommandLineRunner {
         );
 
         return indexCount != null && indexCount > 0;
+    }
+
+    private String quoteIdentifier(String identifier) {
+        return "`" + identifier.replace("`", "``") + "`";
     }
 
     private void migrateStockUnitIds() {

@@ -51,7 +51,7 @@ public class CustomerService {
         customer.setPhone(request.getPhone());
         customer.setEmail(request.getEmail());
         customer.setAddress(request.getAddress());
-        customer.setCreditLimit(request.getCreditLimit());
+        customer.setCreditLimit(nonNegativeMoney(request.getCreditLimit()));
         customer.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
         customer.setCreatedAt(LocalDateTime.now());
         customer.setUpdatedAt(LocalDateTime.now());
@@ -75,7 +75,13 @@ public class CustomerService {
         customer.setPhone(request.getPhone());
         customer.setEmail(request.getEmail());
         customer.setAddress(request.getAddress());
-        customer.setCreditLimit(request.getCreditLimit());
+        BigDecimal creditLimit = nonNegativeMoney(request.getCreditLimit());
+        BigDecimal outstandingDebt = outstandingDebt(customer);
+        if (outstandingDebt.compareTo(creditLimit) > 0) {
+            throw new RuntimeException("Credit limit cannot be below outstanding balance. Outstanding balance: "
+                    + outstandingDebt + ", requested credit limit: " + creditLimit);
+        }
+        customer.setCreditLimit(creditLimit);
         if (request.getIsActive() != null) {
             customer.setIsActive(request.getIsActive());
         }
@@ -103,6 +109,11 @@ public class CustomerService {
     public Page<Customer> search(CustomerSearchRequest request, Pageable pageable) {
         Specification<Customer> specification = (root, query, cb) -> cb.conjunction();
 
+        if (request.getBranchId() != null) {
+            specification = specification.and((root, query, cb) ->
+                    cb.equal(root.get("branchId"), request.getBranchId()));
+        }
+
         if (StringUtils.hasText(request.getQ())) {
             specification = specification.and(buildSearchSpecification(request.getQ()));
         }
@@ -117,44 +128,79 @@ public class CustomerService {
 
     @Transactional
     public void addBalance(Long customerId, BigDecimal amount, String reason) {
-        Customer customer = getById(customerId);
-        customer.setShopBalance(customer.getShopBalance().add(amount));
-        customer.setUpdatedAt(LocalDateTime.now());
-        customerRepository.save(customer);
-
-        // Log balance transaction
-        CustomerBalanceTransaction transaction = new CustomerBalanceTransaction();
-        transaction.setCustomerId(customerId);
-        transaction.setType("CREDIT");
-        transaction.setAmount(amount);
-        transaction.setNote(reason);
-        transaction.setBranchId(customer.getBranchId());
-        transaction.setRefTable("customer_balance");
-        transaction.setRefId(customerId);
-        transaction.setCreatedAt(LocalDateTime.now());
-        transaction.setCreatedBy(getCurrentUserId());
-        balanceTransactionRepository.save(transaction);
+        requireReason(reason);
+        applyBalanceChange(
+                customerId,
+                amount,
+                reason,
+                "MANUAL_ADD_ADJUSTMENT",
+                "customer_balance",
+                customerId,
+                getCurrentUserId(),
+                true
+        );
     }
 
     @Transactional
     public void deductBalance(Long customerId, BigDecimal amount, String reason) {
+        requireReason(reason);
+        applyBalanceChange(
+                customerId,
+                amount,
+                reason,
+                "MANUAL_DEDUCT_ADJUSTMENT",
+                "customer_balance",
+                customerId,
+                getCurrentUserId(),
+                false
+        );
+    }
+
+    @Transactional
+    public void recordCreditSale(Long customerId, BigDecimal amount, Long orderId, String invoiceNo, Long createdBy) {
+        applyBalanceChange(
+                customerId,
+                amount,
+                "Credit sale invoice: " + invoiceNo,
+                "CREDIT_SALE",
+                "customer_orders",
+                orderId,
+                createdBy,
+                false
+        );
+    }
+
+    private void applyBalanceChange(
+            Long customerId,
+            BigDecimal amount,
+            String reason,
+            String transactionType,
+            String refTable,
+            Long refId,
+            Long createdBy,
+            boolean addToShopBalance
+    ) {
         Customer customer = getById(customerId);
-        
-        BigDecimal newBalance = customer.getShopBalance().subtract(amount);
+        BigDecimal balanceAmount = positiveMoney(amount);
+        BigDecimal previousShopBalance = moneyOrZero(customer.getShopBalance());
+        BigDecimal newShopBalance = addToShopBalance
+                ? previousShopBalance.add(balanceAmount)
+                : previousShopBalance.subtract(balanceAmount);
         
         // Check if customer has enough credit to go negative
-        if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
+        if (newShopBalance.compareTo(BigDecimal.ZERO) < 0) {
             // Balance will be negative - check if customer has credit available
-            BigDecimal debtAmount = newBalance.abs(); // e.g., 2000
+            BigDecimal debtAmount = newShopBalance.abs(); // e.g., 2000
             
-            if (debtAmount.compareTo(customer.getCreditLimit()) > 0) {
+            BigDecimal creditLimit = moneyOrZero(customer.getCreditLimit());
+            if (debtAmount.compareTo(creditLimit) > 0) {
                 throw new RuntimeException("Insufficient balance and credit. Credit limit: " + 
-                        customer.getCreditLimit() + ", Debt required: " + debtAmount);
+                        creditLimit + ", Debt required: " + debtAmount);
             }
         }
         
         // Deduct balance (can now be negative) - creditLimit stays the same
-        customer.setShopBalance(newBalance);
+        customer.setShopBalance(newShopBalance);
         customer.setUpdatedAt(LocalDateTime.now());
         customerRepository.save(customer);
 
@@ -162,13 +208,15 @@ public class CustomerService {
         CustomerBalanceTransaction transaction = new CustomerBalanceTransaction();
         transaction.setCustomerId(customerId);
         transaction.setBranchId(customer.getBranchId());
-        transaction.setType("DEBIT");
-        transaction.setAmount(amount);
+        transaction.setType(transactionType);
+        transaction.setAmount(balanceAmount);
+        transaction.setPreviousBalance(outstandingDebt(previousShopBalance));
+        transaction.setNewBalance(outstandingDebt(newShopBalance));
         transaction.setNote(reason);
-        transaction.setRefTable("customer_balance");
-        transaction.setRefId(customerId);
+        transaction.setRefTable(refTable);
+        transaction.setRefId(refId);
         transaction.setCreatedAt(LocalDateTime.now());
-        transaction.setCreatedBy(getCurrentUserId());
+        transaction.setCreatedBy(createdBy != null ? createdBy : getCurrentUserId());
         balanceTransactionRepository.save(transaction);
     }
 
@@ -234,6 +282,12 @@ public class CustomerService {
         return loyaltyTransactionRepository.findByCustomerIdAndType(customerId, type);
     }
 
+    public String findCreatedByName(Long authId) {
+        return authorizationRepository.findById(authId)
+                .map(Authorization::getUsername)
+                .orElse(null);
+    }
+
     private Long getCurrentUserId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         
@@ -254,6 +308,7 @@ public class CustomerService {
     private Specification<Customer> buildSearchSpecification(String queryText) {
         String like = likePattern(queryText);
         return (root, query, cb) -> cb.or(
+                cb.like(cb.lower(root.get("name")), like),
                 cb.like(cb.lower(root.get("phone")), like),
                 cb.like(cb.lower(root.get("nic")), like),
                 cb.like(cb.lower(root.get("loyaltyCardNo")), like)
@@ -263,4 +318,36 @@ public class CustomerService {
     private String likePattern(String value) {
         return "%" + value.trim().toLowerCase() + "%";
     }
+
+    private BigDecimal moneyOrZero(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private BigDecimal nonNegativeMoney(BigDecimal value) {
+        return moneyOrZero(value).max(BigDecimal.ZERO);
+    }
+
+    private BigDecimal positiveMoney(BigDecimal value) {
+        BigDecimal amount = moneyOrZero(value);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Amount must be greater than zero");
+        }
+        return amount;
+    }
+
+    private void requireReason(String reason) {
+        if (!StringUtils.hasText(reason)) {
+            throw new RuntimeException("Reason is required for manual balance adjustments");
+        }
+    }
+
+    private BigDecimal outstandingDebt(Customer customer) {
+        return outstandingDebt(customer.getShopBalance());
+    }
+
+    private BigDecimal outstandingDebt(BigDecimal shopBalanceValue) {
+        BigDecimal shopBalance = moneyOrZero(shopBalanceValue);
+        return shopBalance.compareTo(BigDecimal.ZERO) < 0 ? shopBalance.abs() : BigDecimal.ZERO;
+    }
+
 }

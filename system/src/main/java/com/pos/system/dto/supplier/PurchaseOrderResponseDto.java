@@ -3,6 +3,7 @@ package com.pos.system.dto.supplier;
 import lombok.Builder;
 import lombok.Data;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -19,5 +20,6 @@ public class PurchaseOrderResponseDto {
     private Long createdBy;
     private LocalDateTime createdAt;
     private String note;
+    private BigDecimal totalAmount;
     private List<PurchaseOrderItemResponseDto> items;
 }

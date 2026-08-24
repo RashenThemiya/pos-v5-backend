@@ -30,6 +30,9 @@ public class CashSessionTransaction {
     private Long purchaseReturnId;
     private Long expenseId;
     private Long withdrawalId;
+    private Long orderId;
+    private String invoiceNo;
+    private Long salesReturnId;
     private String note;
 
     @Column(nullable = false)
