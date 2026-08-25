@@ -157,10 +157,27 @@ public class RoleService {
             uniqueCodes.add(normalizedCode);
         }
 
-        rolePermissionRepository.deleteByRoleId(roleId);
+        List<RolePermission> existingMappings = rolePermissionRepository.findByRoleId(roleId);
+        Set<String> existingCodes = new LinkedHashSet<>();
+
+        for (RolePermission mapping : existingMappings) {
+            existingCodes.add(normalizeAuthorityCode(mapping.getAuthorityCode()));
+        }
+
+        List<RolePermission> mappingsToRemove = existingMappings.stream()
+                .filter(mapping -> !uniqueCodes.contains(normalizeAuthorityCode(mapping.getAuthorityCode())))
+                .toList();
+
+        if (!mappingsToRemove.isEmpty()) {
+            rolePermissionRepository.deleteAll(mappingsToRemove);
+        }
 
         List<RolePermission> mappings = new ArrayList<>();
         for (String authorityCode : uniqueCodes) {
+            if (existingCodes.contains(authorityCode)) {
+                continue;
+            }
+
             RolePermission rolePermission = new RolePermission();
             rolePermission.setRoleId(roleId);
             rolePermission.setAuthorityCode(authorityCode);
