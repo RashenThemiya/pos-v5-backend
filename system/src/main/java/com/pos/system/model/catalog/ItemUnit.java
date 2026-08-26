@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @Entity
 @Table(name = "item_units", uniqueConstraints = {
         @UniqueConstraint(columnNames = {"item_id", "unit_name"}),
+        @UniqueConstraint(columnNames = {"item_id", "master_unit_id"}),
         @UniqueConstraint(columnNames = {"branch_id", "barcode"})
 })
 public class ItemUnit {
@@ -27,6 +28,9 @@ public class ItemUnit {
 
     @Column(nullable = false)
     private Long itemId;
+
+    @Column(name = "master_unit_id")
+    private Long masterUnitId;
 
     @Column(nullable = false, length = 30)
     private String unitName;

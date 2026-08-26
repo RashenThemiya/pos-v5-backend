@@ -8,6 +8,7 @@ import com.pos.system.dto.item.ItemUnitResponse;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleItemMapping;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -31,6 +32,7 @@ public class ItemService {
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
     private final ScaleItemMappingRepository scaleItemMappingRepository;
 
     private final BranchRepository branchRepository;
@@ -200,7 +202,11 @@ public class ItemService {
         ItemUnit unit = new ItemUnit();
         unit.setBranchId(item.getBranchId());
         unit.setItemId(item.getItemId());
-        unit.setUnitName(request.getUnitName().trim());
+        UnitMaster masterUnit = request.getMasterUnitId() != null
+                ? resolveMasterUnitForAssignment(item, request.getMasterUnitId(), null, true)
+                : resolveOrCreateMasterUnitForAssignment(item, request.getUnitName(), null);
+        unit.setMasterUnitId(masterUnit.getUnitId());
+        unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
         unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
         unit.setIsBaseUnit(false);
@@ -240,7 +246,11 @@ public class ItemService {
 
         validateAdditionalUnitRequest(item, request, unitId);
 
-        unit.setUnitName(request.getUnitName().trim());
+        UnitMaster masterUnit = request.getMasterUnitId() != null
+                ? resolveMasterUnitForAssignment(item, request.getMasterUnitId(), unit, false)
+                : resolveOrCreateMasterUnitForAssignment(item, request.getUnitName(), unit);
+        unit.setMasterUnitId(masterUnit.getUnitId());
+        unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
         unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : unit.getIsActive());
@@ -342,8 +352,8 @@ public class ItemService {
 
         ItemUnitRequest unit = buildBaseUnitRequest(request);
 
-        if (unit.getUnitName() == null || unit.getUnitName().trim().isEmpty()) {
-            throw new RuntimeException("Base unit name is required");
+        if (unit.getMasterUnitId() == null && (unit.getUnitName() == null || unit.getUnitName().trim().isEmpty())) {
+            throw new RuntimeException("Base unit is required");
         }
 
         if (unit.getMultiplierToBase() == null || unit.getMultiplierToBase().compareTo(BigDecimal.ONE) != 0) {
@@ -366,21 +376,8 @@ public class ItemService {
             throw new RuntimeException("Unit request is required");
         }
 
-        if (request.getUnitName() == null || request.getUnitName().trim().isEmpty()) {
-            throw new RuntimeException("Unit name is required");
-        }
-
-        String unitName = request.getUnitName().trim();
-
-        boolean duplicateName;
-        if (currentUnitId == null) {
-            duplicateName = itemUnitRepository.existsByItemIdAndUnitName(item.getItemId(), unitName);
-        } else {
-            duplicateName = itemUnitRepository.existsByItemIdAndUnitNameAndUnitIdNot(item.getItemId(), unitName, currentUnitId);
-        }
-
-        if (duplicateName) {
-            throw new RuntimeException("Unit name already exists for this item: " + request.getUnitName());
+        if (request.getMasterUnitId() == null && (request.getUnitName() == null || request.getUnitName().trim().isEmpty())) {
+            throw new RuntimeException("Unit is required");
         }
 
         if (request.getMultiplierToBase() == null || request.getMultiplierToBase().compareTo(BigDecimal.ZERO) <= 0) {
@@ -407,6 +404,7 @@ public class ItemService {
 
     private ItemUnitRequest buildBaseUnitRequest(ItemRequest request) {
         ItemUnitRequest unit = new ItemUnitRequest();
+        unit.setMasterUnitId(request.getBaseMasterUnitId());
         unit.setUnitName(request.getBaseUnitName());
         unit.setMultiplierToBase(new BigDecimal(request.getBaseUnitMultiplierToBase()));
         unit.setBarcode(request.getBaseUnitBarcode());
@@ -421,7 +419,11 @@ public class ItemService {
 
         unit.setBranchId(item.getBranchId());
         unit.setItemId(item.getItemId());
-        unit.setUnitName(request.getUnitName().trim());
+        UnitMaster masterUnit = request.getMasterUnitId() != null
+                ? resolveMasterUnitForAssignment(item, request.getMasterUnitId(), unit, unit.getUnitId() == null)
+                : resolveOrCreateMasterUnit(item.getBranchId(), request.getUnitName());
+        unit.setMasterUnitId(masterUnit.getUnitId());
+        unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(BigDecimal.ONE);
         unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
         unit.setIsBaseUnit(true);
@@ -602,7 +604,8 @@ public class ItemService {
         ItemUnitResponse response = new ItemUnitResponse();
         response.setUnitId(unit.getUnitId());
         response.setItemId(unit.getItemId());
-        response.setUnitName(unit.getUnitName());
+        response.setMasterUnitId(unit.getMasterUnitId());
+        response.setUnitName(resolveUnitName(unit));
         response.setMultiplierToBase(unit.getMultiplierToBase());
         response.setBarcode(unit.getBarcode());
         response.setDefaultSellingPrice(unit.getDefaultSellingPrice());
@@ -611,5 +614,73 @@ public class ItemService {
         response.setCreatedAt(unit.getCreatedAt());
         response.setUpdatedAt(unit.getUpdatedAt());
         return response;
+    }
+
+    private UnitMaster resolveMasterUnitForAssignment(Item item, Long masterUnitId, ItemUnit currentUnit, boolean creating) {
+        if (masterUnitId == null) {
+            throw new RuntimeException("Unit is required");
+        }
+
+        UnitMaster masterUnit = unitMasterRepository.findByUnitIdAndBranchId(masterUnitId, item.getBranchId())
+                .orElseThrow(() -> new RuntimeException("Unit not found in this branch"));
+
+        boolean sameUnit = currentUnit != null && masterUnitId.equals(currentUnit.getMasterUnitId());
+        if (!Boolean.TRUE.equals(masterUnit.getIsActive()) && (creating || !sameUnit)) {
+            throw new RuntimeException("Inactive units cannot be assigned to items");
+        }
+
+        boolean duplicate = currentUnit == null
+                ? itemUnitRepository.existsByItemIdAndMasterUnitId(item.getItemId(), masterUnitId)
+                : itemUnitRepository.existsByItemIdAndMasterUnitIdAndUnitIdNot(item.getItemId(), masterUnitId, currentUnit.getUnitId());
+
+        if (duplicate) {
+            throw new RuntimeException("Unit already assigned to this item: " + masterUnit.getName());
+        }
+
+        return masterUnit;
+    }
+
+    private UnitMaster resolveOrCreateMasterUnit(Long branchId, String unitName) {
+        if (unitName == null || unitName.trim().isEmpty()) {
+            throw new RuntimeException("Base unit is required");
+        }
+
+        String normalized = unitName.trim().toUpperCase();
+        return unitMasterRepository.findByBranchId(branchId)
+                .stream()
+                .filter(unit -> normalized.equals(unit.getName()))
+                .findFirst()
+                .orElseGet(() -> {
+                    UnitMaster unit = new UnitMaster();
+                    unit.setBranchId(branchId);
+                    unit.setName(normalized);
+                    unit.setIsActive(true);
+                    unit.setCreatedAt(LocalDateTime.now());
+                    unit.setUpdatedAt(LocalDateTime.now());
+                    return unitMasterRepository.save(unit);
+                });
+    }
+
+    private UnitMaster resolveOrCreateMasterUnitForAssignment(Item item, String unitName, ItemUnit currentUnit) {
+        UnitMaster masterUnit = resolveOrCreateMasterUnit(item.getBranchId(), unitName);
+        boolean duplicate = currentUnit == null
+                ? itemUnitRepository.existsByItemIdAndMasterUnitId(item.getItemId(), masterUnit.getUnitId())
+                : itemUnitRepository.existsByItemIdAndMasterUnitIdAndUnitIdNot(item.getItemId(), masterUnit.getUnitId(), currentUnit.getUnitId());
+
+        if (duplicate) {
+            throw new RuntimeException("Unit already assigned to this item: " + masterUnit.getName());
+        }
+
+        return masterUnit;
+    }
+
+    private String resolveUnitName(ItemUnit itemUnit) {
+        if (itemUnit.getMasterUnitId() != null) {
+            return unitMasterRepository.findById(itemUnit.getMasterUnitId())
+                    .map(UnitMaster::getName)
+                    .orElse(itemUnit.getUnitName());
+        }
+
+        return itemUnit.getUnitName();
     }
 }

@@ -17,6 +17,7 @@ public class ItemRequest {
     private Boolean isWeighed;
     private String scaleBarcodePrefix;
     private Boolean isActive;
+    private Long baseMasterUnitId;
     private String baseUnitName;
     private String baseUnitMultiplierToBase;
     private String baseUnitBarcode;
