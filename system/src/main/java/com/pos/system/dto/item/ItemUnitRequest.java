@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 
 @Data
 public class ItemUnitRequest {
+    private Long masterUnitId;
     private String unitName;
     private BigDecimal multiplierToBase;
     private String barcode;

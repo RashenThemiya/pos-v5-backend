@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 public class ItemUnitResponse {
     private Long unitId;
     private Long itemId;
+    private Long masterUnitId;
     private String unitName;
     private BigDecimal multiplierToBase;
     private String barcode;

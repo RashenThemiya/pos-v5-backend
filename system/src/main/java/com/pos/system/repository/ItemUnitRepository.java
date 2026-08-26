@@ -10,11 +10,14 @@ import java.util.Optional;
 
 public interface ItemUnitRepository extends JpaRepository<ItemUnit, Long> {
     List<ItemUnit> findByItemId(Long itemId);
+    List<ItemUnit> findByMasterUnitId(Long masterUnitId);
     Optional<ItemUnit> findByItemIdAndIsBaseUnitTrue(Long itemId);
     Optional<ItemUnit> findByBranchIdAndBarcode(Long branchId, String barcode);
     boolean existsByBranchIdAndBarcode(Long branchId, String barcode);
     boolean existsByItemIdAndUnitName(Long itemId, String unitName);
     boolean existsByItemIdAndUnitNameAndUnitIdNot(Long itemId, String unitName, Long unitId);
+    boolean existsByItemIdAndMasterUnitId(Long itemId, Long masterUnitId);
+    boolean existsByItemIdAndMasterUnitIdAndUnitIdNot(Long itemId, Long masterUnitId, Long unitId);
         Optional<ItemUnit> findByUnitIdAndIsActiveTrue(Long unitId);
 
     Optional<ItemUnit> findByItemIdAndUnitIdAndIsActiveTrue(Long itemId, Long unitId);
