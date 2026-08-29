@@ -39,6 +39,7 @@ public class StockResponseDto {
     @Builder
     public static class UnitStockDto {
         private Long unitId;
+        private Long masterUnitId;
         private String unitName;
         private String unitBarcode;
         private BigDecimal multiplierToBase;

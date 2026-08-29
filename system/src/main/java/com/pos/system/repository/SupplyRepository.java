@@ -12,6 +12,8 @@ public interface SupplyRepository extends JpaRepository<Supply, Long> {
 
     List<Supply> findByBranchId(Long branchId);
 
+    List<Supply> findByPoId(Long poId);
+
     List<Supply> findByBranchIdAndPaymentStatusNotOrderBySupplyDateDesc(
             Long branchId,
             String paymentStatus

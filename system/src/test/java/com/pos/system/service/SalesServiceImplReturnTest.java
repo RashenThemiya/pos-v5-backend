@@ -39,6 +39,7 @@ class SalesServiceImplReturnTest {
     @Mock private StockMovementRepository stockMovementRepository;
     @Mock private CashSessionTransactionRepository cashSessionTransactionRepository;
     @Mock private ItemUnitRepository itemUnitRepository;
+    @Mock private UnitMasterRepository unitMasterRepository;
     @Mock private ItemRepository itemRepository;
     @Mock private ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
     @Mock private ScaleItemMappingRepository scaleItemMappingRepository;
@@ -63,6 +64,7 @@ class SalesServiceImplReturnTest {
                 stockMovementRepository,
                 cashSessionTransactionRepository,
                 itemUnitRepository,
+                unitMasterRepository,
                 itemRepository,
                 scaleBarcodeSettingRepository,
                 scaleItemMappingRepository,

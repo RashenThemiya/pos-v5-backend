@@ -128,6 +128,12 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getPaymentsBySupply(supplyId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/purchase-order/{poId}")
+    public ResponseEntity<List<SupplierPaymentResponseDto>> getPaymentsByPurchaseOrder(@PathVariable Long poId) {
+        return ResponseEntity.ok(supplierManagementService.getPaymentsByPurchaseOrder(poId));
+    }
+
     // PURCHASE RETURNS
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_CREATE')")

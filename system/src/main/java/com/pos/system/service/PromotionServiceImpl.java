@@ -2,6 +2,7 @@ package com.pos.system.service;
 
 import com.pos.system.dto.promotion.*;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.promotion.*;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
@@ -25,6 +26,7 @@ public class PromotionServiceImpl implements PromotionService {
     private final PromotionBuyXGetYRuleRepository buyXGetYRuleRepository;
     private final PromotionRedemptionRepository redemptionRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
 
     // ─── Promotion CRUD ──────────────────────────────────────────────────────────
 
@@ -466,9 +468,15 @@ public class PromotionServiceImpl implements PromotionService {
     }
 
     private String getUnitName(Long unitId) {
-        return itemUnitRepository.findByUnitIdAndIsActiveTrue(unitId)
-                .map(ItemUnit::getUnitName)
+        return itemUnitRepository.findById(unitId)
+                .map(this::resolveUnitName)
                 .orElse("unit");
+    }
+
+    private Long getMasterUnitId(Long unitId) {
+        return itemUnitRepository.findById(unitId)
+                .map(ItemUnit::getMasterUnitId)
+                .orElse(null);
     }
 
     private void validateUnitBelongsToItem(Long itemId, Long unitId) {
@@ -542,6 +550,7 @@ public class PromotionServiceImpl implements PromotionService {
                 .promotionId(i.getPromotionId())
                 .itemId(i.getItemId())
                 .unitId(i.getUnitId())
+                .masterUnitId(getMasterUnitId(i.getUnitId()))
                 .unitName(getUnitName(i.getUnitId()))
                 .maxQty(i.getMaxQty())
                 .usedQty(i.getUsedQty())
@@ -566,14 +575,26 @@ public class PromotionServiceImpl implements PromotionService {
                 .promotionId(r.getPromotionId())
                 .buyItemId(r.getBuyItemId())
                 .buyUnitId(r.getBuyUnitId())
+                .buyMasterUnitId(getMasterUnitId(r.getBuyUnitId()))
                 .buyUnitName(getUnitName(r.getBuyUnitId()))
                 .buyQty(r.getBuyQty())
                 .getItemId(r.getGetItemId())
                 .getUnitId(r.getGetUnitId())
+                .getMasterUnitId(getMasterUnitId(r.getGetUnitId()))
                 .getUnitName(getUnitName(r.getGetUnitId()))
                 .getQty(r.getGetQty())
                 .getDiscountPercent(r.getGetDiscountPercent())
                 .build();
+    }
+
+    private String resolveUnitName(ItemUnit unit) {
+        if (unit.getMasterUnitId() != null) {
+            return unitMasterRepository.findById(unit.getMasterUnitId())
+                    .map(UnitMaster::getName)
+                    .orElse(unit.getUnitName());
+        }
+
+        return unit.getUnitName();
     }
 
     private PromotionResponse mapActivePromotions(Promotion p, boolean includeDetails) {

@@ -13,6 +13,8 @@ public class PurchaseReturnItemResponseDto {
     private Long purchaseReturnId;
     private Long itemId;
     private Long unitId;
+    private Long masterUnitId;
+    private String unitName;
     private String internalBatchBarcode;
     private String returnStockType;
     private BigDecimal quantity;

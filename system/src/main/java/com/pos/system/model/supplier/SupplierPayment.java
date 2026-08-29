@@ -25,6 +25,7 @@ public class SupplierPayment {
     private Long supplierId;
 
     private Long supplyId;
+    private Long poId;
 
     @Column(nullable = false, precision = 14, scale = 2)
     private BigDecimal amount;

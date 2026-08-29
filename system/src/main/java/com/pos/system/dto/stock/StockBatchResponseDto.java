@@ -17,6 +17,7 @@ public class StockBatchResponseDto {
     private String itemName;
     private Long supplyProductId;
     private Long unitId;
+    private Long masterUnitId;
     private String unitName;
     private String unitBarcode;
     private BigDecimal unitMultiplierToBase;

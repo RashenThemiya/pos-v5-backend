@@ -70,6 +70,8 @@ public interface SupplierManagementService {
 
     List<SupplierPaymentResponseDto> getPaymentsBySupply(Long supplyId);
 
+    List<SupplierPaymentResponseDto> getPaymentsByPurchaseOrder(Long poId);
+
     // =========================
     // PURCHASE RETURNS
     // =========================

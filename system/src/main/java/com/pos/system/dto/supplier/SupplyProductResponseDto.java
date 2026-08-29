@@ -14,6 +14,8 @@ public class SupplyProductResponseDto {
     private Long supplyId;
     private Long itemId;
     private Long unitId;
+    private Long masterUnitId;
+    private String unitName;
     private String batchNo;
     private String supplierBatchBarcode;
     private String productBarcode;
