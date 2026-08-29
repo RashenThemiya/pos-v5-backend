@@ -5,6 +5,7 @@ import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
 import com.pos.system.model.stock.StockMovement;
@@ -20,6 +21,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -52,6 +54,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
     private final UnitConversionService unitConversionService;
 
     private final CashSessionRepository cashSessionRepository;
@@ -298,19 +301,27 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
         List<PurchaseOrderItemResponseDto> items = purchaseOrderItemRepository.findByPoId(poId)
                 .stream()
-                .map(item -> PurchaseOrderItemResponseDto.builder()
-                        .poItemId(item.getPoItemId())
-                        .poId(item.getPoId())
-                        .itemId(item.getItemId())
-                        .unitId(item.getUnitId())
-                        .orderedQty(item.getOrderedQty())
-                        .receivedQty(item.getReceivedQty())
-                        .unitCostEst(item.getUnitCostEst())
-                        .build())
+                .map(item -> {
+                    ItemUnit unit = findItemUnit(item.getItemId(), item.getUnitId());
+                    return PurchaseOrderItemResponseDto.builder()
+                            .poItemId(item.getPoItemId())
+                            .poId(item.getPoId())
+                            .itemId(item.getItemId())
+                            .unitId(item.getUnitId())
+                            .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                            .unitName(resolveUnitName(unit))
+                            .orderedQty(item.getOrderedQty())
+                            .receivedQty(item.getReceivedQty())
+                            .remainingQty(nvlQty(item.getOrderedQty()).subtract(nvlQty(item.getReceivedQty())).max(BigDecimal.ZERO))
+                            .unitCostEst(item.getUnitCostEst())
+                            .build();
+                })
                 .toList();
         BigDecimal totalAmount = items.stream()
                 .map(item -> nvlQty(item.getOrderedQty()).multiply(nvlMoney(item.getUnitCostEst())))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal paidAmount = calculatePurchaseOrderPaidAmount(poId);
+        BigDecimal balanceAmount = totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
 
         return PurchaseOrderResponseDto.builder()
                 .poId(po.getPoId())
@@ -323,6 +334,10 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .createdAt(po.getCreatedAt())
                 .note(po.getNote())
                 .totalAmount(totalAmount)
+                .paidAmount(paidAmount)
+                .balanceAmount(balanceAmount)
+                .receivingStatus(resolvePurchaseOrderReceivingStatus(items, po.getStatus()))
+                .paymentStatus(resolvePaymentStatus(totalAmount, paidAmount))
                 .items(items)
                 .build();
     }
@@ -348,44 +363,84 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             throw new RuntimeException("Supplier does not belong to this branch");
         }
 
-        if (dto.getGrnNo() != null && !dto.getGrnNo().isBlank()) {
+        if (dto.getProducts() == null || dto.getProducts().isEmpty()) {
+            throw new RuntimeException("Supply products cannot be empty");
+        }
+
+        validateDuplicateSupplyLines(dto.getProducts());
+        validatePurchaseOrderCanReceive(dto);
+
+        Long receivedBy = resolveUserId(dto.getReceivedBy());
+        String status = dto.getStatus() != null ? dto.getStatus() : "COMPLETED";
+
+        Supply existingSupply = findActiveSupplyForPurchaseOrder(dto.getPoId());
+        boolean appendingToExistingGrn = existingSupply != null;
+
+        if (!appendingToExistingGrn && dto.getGrnNo() != null && !dto.getGrnNo().isBlank()) {
             supplyRepository.findByGrnNo(dto.getGrnNo())
                     .ifPresent(x -> {
                         throw new RuntimeException("GRN number already exists");
                     });
         }
 
-        if (dto.getProducts() == null || dto.getProducts().isEmpty()) {
-            throw new RuntimeException("Supply products cannot be empty");
+        Supply savedSupply;
+        BigDecimal existingSubtotal = BigDecimal.ZERO;
+        BigDecimal existingDiscount = BigDecimal.ZERO;
+        BigDecimal existingTaxAmount = BigDecimal.ZERO;
+        BigDecimal existingRounding = BigDecimal.ZERO;
+        BigDecimal existingPaidAmount = BigDecimal.ZERO;
+
+        if (appendingToExistingGrn) {
+            if (!existingSupply.getBranchId().equals(dto.getBranchId())) {
+                throw new RuntimeException("Existing GRN does not belong to this branch");
+            }
+            if (!existingSupply.getSupplierId().equals(dto.getSupplierId())) {
+                throw new RuntimeException("Existing GRN does not belong to this supplier");
+            }
+
+            existingSubtotal = nvlMoney(existingSupply.getSubtotal());
+            existingDiscount = nvlMoney(existingSupply.getDiscount());
+            existingTaxAmount = nvlMoney(existingSupply.getTaxAmount());
+            existingRounding = nvlMoney(existingSupply.getRounding());
+            existingPaidAmount = nvlMoney(existingSupply.getPaidAmount());
+
+            if (isBlank(existingSupply.getInvoiceNo()) && !isBlank(dto.getInvoiceNo())) {
+                existingSupply.setInvoiceNo(dto.getInvoiceNo());
+            }
+            existingSupply.setPaymentMethod(normalizePaymentMethod(
+                    dto.getPaymentMethod(),
+                    normalizePaymentMethod(existingSupply.getPaymentMethod(), "CREDIT")
+            ));
+            existingSupply.setStatus(status);
+            existingSupply.setReceivedBy(receivedBy);
+            if (isBlank(existingSupply.getNotes()) && !isBlank(dto.getNotes())) {
+                existingSupply.setNotes(dto.getNotes());
+            }
+            savedSupply = supplyRepository.save(existingSupply);
+        } else {
+            Supply supply = new Supply();
+            supply.setBranchId(dto.getBranchId());
+            supply.setSupplierId(dto.getSupplierId());
+            supply.setPoId(dto.getPoId());
+            supply.setGrnNo(resolveGrnNo(dto.getGrnNo()));
+            supply.setInvoiceNo(dto.getInvoiceNo());
+            supply.setSubtotal(BigDecimal.ZERO);
+            supply.setDiscount(BigDecimal.ZERO);
+            supply.setTaxAmount(BigDecimal.ZERO);
+            supply.setRounding(BigDecimal.ZERO);
+            supply.setTotal(BigDecimal.ZERO);
+            supply.setPaidAmount(BigDecimal.ZERO);
+            supply.setPayableAmount(BigDecimal.ZERO);
+            supply.setBalanceAmount(BigDecimal.ZERO);
+            supply.setPaymentStatus("UNPAID");
+            supply.setPaymentMethod(normalizePaymentMethod(dto.getPaymentMethod(), "CREDIT"));
+            supply.setStatus(status);
+            supply.setSupplyDate(dto.getSupplyDate() != null ? dto.getSupplyDate() : LocalDateTime.now());
+            supply.setReceivedBy(receivedBy);
+            supply.setNotes(dto.getNotes());
+
+            savedSupply = supplyRepository.save(supply);
         }
-
-        validateDuplicateSupplyLines(dto.getProducts());
-
-        Long receivedBy = resolveUserId(dto.getReceivedBy());
-        String status = dto.getStatus() != null ? dto.getStatus() : "COMPLETED";
-
-        Supply supply = new Supply();
-        supply.setBranchId(dto.getBranchId());
-        supply.setSupplierId(dto.getSupplierId());
-        supply.setPoId(dto.getPoId());
-        supply.setGrnNo(resolveGrnNo(dto.getGrnNo()));
-        supply.setInvoiceNo(dto.getInvoiceNo());
-        supply.setSubtotal(BigDecimal.ZERO);
-        supply.setDiscount(nvlMoney(dto.getDiscount()));
-        supply.setTaxAmount(nvlMoney(dto.getTaxAmount()));
-        supply.setRounding(nvlMoney(dto.getRounding()));
-        supply.setTotal(BigDecimal.ZERO);
-        supply.setPaidAmount(nvlMoney(dto.getPaidAmount()));
-        supply.setPayableAmount(BigDecimal.ZERO);
-        supply.setBalanceAmount(BigDecimal.ZERO);
-        supply.setPaymentStatus("UNPAID");
-        supply.setPaymentMethod(dto.getPaymentMethod() != null ? dto.getPaymentMethod() : "CREDIT");
-        supply.setStatus(status);
-        supply.setSupplyDate(dto.getSupplyDate() != null ? dto.getSupplyDate() : LocalDateTime.now());
-        supply.setReceivedBy(receivedBy);
-        supply.setNotes(dto.getNotes());
-
-        Supply savedSupply = supplyRepository.save(supply);
 
         BigDecimal calculatedSubtotal = BigDecimal.ZERO;
 
@@ -428,7 +483,6 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
             if ("COMPLETED".equalsIgnoreCase(status)) {
                 addPurchasedStock(savedSupply, savedProduct);
-                updatePoReceivedQtyIfNeeded(savedSupply.getPoId(), savedProduct);
                 updateSupplierItemLastPurchaseCost(
                         dto.getBranchId(),
                         dto.getSupplierId(),
@@ -438,34 +492,59 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 );
             }
         }
+        refreshPurchaseOrderReceivedQtyFromSupplies(savedSupply.getPoId());
+        updatePurchaseOrderStatusFromReceivedQty(savedSupply.getPoId());
 
         BigDecimal discount = nvlMoney(dto.getDiscount());
         BigDecimal taxAmount = nvlMoney(dto.getTaxAmount());
         BigDecimal rounding = nvlMoney(dto.getRounding());
 
-        BigDecimal finalTotal = dto.getTotal() != null && dto.getTotal().compareTo(BigDecimal.ZERO) > 0
-                ? dto.getTotal()
-                : calculatedSubtotal.subtract(discount).add(taxAmount).add(rounding);
+        BigDecimal receiptTotal = calculatedSubtotal
+                .subtract(discount)
+                .add(taxAmount)
+                .add(rounding)
+                .max(BigDecimal.ZERO);
 
         BigDecimal paidAmount = nvlMoney(dto.getPaidAmount());
-        BigDecimal payableAmount = finalTotal;
-        BigDecimal balanceAmount = payableAmount.subtract(paidAmount);
+        BigDecimal receiptBalanceAmount = receiptTotal.subtract(paidAmount);
 
-        if (balanceAmount.compareTo(BigDecimal.ZERO) < 0) {
+        if (receiptBalanceAmount.compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Paid amount cannot exceed total");
         }
+        validatePurchaseOrderPaymentLimit(savedSupply.getPoId(), paidAmount);
 
-        savedSupply.setSubtotal(calculatedSubtotal);
-        savedSupply.setTotal(finalTotal);
+        BigDecimal subtotal = existingSubtotal.add(calculatedSubtotal);
+        BigDecimal totalDiscount = existingDiscount.add(discount);
+        BigDecimal totalTaxAmount = existingTaxAmount.add(taxAmount);
+        BigDecimal totalRounding = existingRounding.add(rounding);
+        BigDecimal payableAmount = subtotal
+                .subtract(totalDiscount)
+                .add(totalTaxAmount)
+                .add(totalRounding)
+                .max(BigDecimal.ZERO);
+        BigDecimal totalPaidAmount = existingPaidAmount.add(paidAmount);
+        BigDecimal balanceAmount = payableAmount.subtract(totalPaidAmount);
+
+        savedSupply.setSubtotal(subtotal);
+        savedSupply.setDiscount(totalDiscount);
+        savedSupply.setTaxAmount(totalTaxAmount);
+        savedSupply.setRounding(totalRounding);
+        savedSupply.setTotal(payableAmount);
         savedSupply.setPayableAmount(payableAmount);
-        savedSupply.setPaidAmount(paidAmount);
+        savedSupply.setPaidAmount(totalPaidAmount);
         savedSupply.setBalanceAmount(balanceAmount);
-        savedSupply.setPaymentStatus(resolvePaymentStatus(payableAmount, paidAmount));
+        savedSupply.setPaymentStatus(resolvePaymentStatus(payableAmount, totalPaidAmount));
 
         supplyRepository.save(savedSupply);
+        createInitialSupplyPaymentIfNeeded(
+                savedSupply,
+                paidAmount,
+                receivedBy,
+                dto.getSupplyDate() != null ? dto.getSupplyDate() : LocalDateTime.now()
+        );
 
-        if ("COMPLETED".equalsIgnoreCase(status) && balanceAmount.compareTo(BigDecimal.ZERO) > 0) {
-            supplier.setBalance(nvlMoney(supplier.getBalance()).add(balanceAmount));
+        if ("COMPLETED".equalsIgnoreCase(status) && receiptBalanceAmount.compareTo(BigDecimal.ZERO) > 0) {
+            supplier.setBalance(nvlMoney(supplier.getBalance()).add(receiptBalanceAmount));
             supplier.setUpdatedAt(LocalDateTime.now());
             supplierRepository.save(supplier);
 
@@ -473,10 +552,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             txn.setBranchId(dto.getBranchId());
             txn.setSupplierId(dto.getSupplierId());
             txn.setType("SUPPLY_CREDIT");
-            txn.setAmount(balanceAmount);
+            txn.setAmount(receiptBalanceAmount);
             txn.setRefTable("supplies");
             txn.setRefId(savedSupply.getSupplyId());
-            txn.setNote("Balance added from completed supply");
+            txn.setNote(appendingToExistingGrn
+                    ? "Balance added from additional received goods"
+                    : "Balance added from completed supply");
             txn.setCreatedBy(receivedBy);
             txn.setCreatedAt(LocalDateTime.now());
             supplierBalanceTransactionRepository.save(txn);
@@ -512,28 +593,43 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 ? resolvePaymentStatus(responsePayable, responsePaid)
                 : supply.getPaymentStatus();
 
+        if (shouldUsePurchaseOrderPaymentsForSupply(supply, responsePayable)) {
+            BigDecimal purchaseOrderPaid = calculatePurchaseOrderPaidAmount(supply.getPoId());
+
+            if (purchaseOrderPaid.compareTo(responsePaid) > 0) {
+                responsePaid = purchaseOrderPaid.min(responsePayable);
+                responseBalance = responsePayable.subtract(responsePaid).max(BigDecimal.ZERO);
+                responsePaymentStatus = resolvePaymentStatus(responsePayable, responsePaid);
+            }
+        }
+
         List<SupplyProductResponseDto> products = supplyProducts
                 .stream()
-                .map(product -> SupplyProductResponseDto.builder()
-                        .supplyProductId(product.getSupplyProductId())
-                        .supplyId(product.getSupplyId())
-                        .itemId(product.getItemId())
-                        .unitId(product.getUnitId())
-                        .batchNo(product.getBatchNo())
-                        .supplierBatchBarcode(product.getSupplierBatchBarcode())
-                        .productBarcode(product.getProductBarcode())
-                        .internalBatchBarcode(product.getInternalBatchBarcode())
-                        .costPrice(product.getCostPrice())
-                        .sellingPrice(product.getSellingPrice())
-                        .quantityReceived(product.getQuantityReceived())
-                        .quantityReceivedBase(product.getQuantityReceivedBase())
-                        .qtyRemaining(product.getQtyRemaining())
-                        .qtyDamaged(product.getQtyDamaged())
-                        .qtyExpired(product.getQtyExpired())
-                        .expiryDate(product.getExpiryDate())
-                        .lineTotal(product.getLineTotal())
-                        .createdAt(product.getCreatedAt())
-                        .build())
+                .map(product -> {
+                    ItemUnit unit = findItemUnit(product.getItemId(), product.getUnitId());
+                    return SupplyProductResponseDto.builder()
+                            .supplyProductId(product.getSupplyProductId())
+                            .supplyId(product.getSupplyId())
+                            .itemId(product.getItemId())
+                            .unitId(product.getUnitId())
+                            .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                            .unitName(resolveUnitName(unit))
+                            .batchNo(product.getBatchNo())
+                            .supplierBatchBarcode(product.getSupplierBatchBarcode())
+                            .productBarcode(product.getProductBarcode())
+                            .internalBatchBarcode(product.getInternalBatchBarcode())
+                            .costPrice(product.getCostPrice())
+                            .sellingPrice(product.getSellingPrice())
+                            .quantityReceived(product.getQuantityReceived())
+                            .quantityReceivedBase(product.getQuantityReceivedBase())
+                            .qtyRemaining(product.getQtyRemaining())
+                            .qtyDamaged(product.getQtyDamaged())
+                            .qtyExpired(product.getQtyExpired())
+                            .expiryDate(product.getExpiryDate())
+                            .lineTotal(product.getLineTotal())
+                            .createdAt(product.getCreatedAt())
+                            .build();
+                })
                 .toList();
 
         return SupplyResponseDto.builder()
@@ -630,6 +726,8 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             cashSessionId = cashSession.getSessionId();
         }
 
+        Long paymentPoId = dto.getPoId();
+
         if (dto.getSupplyId() != null) {
             Supply supply = supplyRepository.findById(dto.getSupplyId())
                     .orElseThrow(() -> new RuntimeException("Supply not found"));
@@ -648,12 +746,34 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             if (newPaid.compareTo(total) > 0) {
                 throw new RuntimeException("Payment amount exceeds supply balance");
             }
+
+            paymentPoId = supply.getPoId() != null ? supply.getPoId() : paymentPoId;
+        }
+
+        if (paymentPoId != null) {
+            PurchaseOrder purchaseOrder = purchaseOrderRepository.findById(paymentPoId)
+                    .orElseThrow(() -> new RuntimeException("Purchase order not found"));
+
+            if (!purchaseOrder.getBranchId().equals(dto.getBranchId())) {
+                throw new RuntimeException("Purchase order does not belong to this branch");
+            }
+
+            if (!purchaseOrder.getSupplierId().equals(dto.getSupplierId())) {
+                throw new RuntimeException("Purchase order does not belong to this supplier");
+            }
+
+            if ("CANCELLED".equalsIgnoreCase(purchaseOrder.getStatus())) {
+                throw new RuntimeException("Cannot record payment against a cancelled purchase order");
+            }
+
+            validatePurchaseOrderPaymentLimit(paymentPoId, dto.getAmount());
         }
 
         SupplierPayment payment = new SupplierPayment();
         payment.setBranchId(dto.getBranchId());
         payment.setSupplierId(dto.getSupplierId());
         payment.setSupplyId(dto.getSupplyId());
+        payment.setPoId(paymentPoId);
         payment.setAmount(nvlMoney(dto.getAmount()));
         payment.setPaymentMethod(paymentMethod);
         payment.setPaymentDate(dto.getPaymentDate() != null ? dto.getPaymentDate() : LocalDateTime.now());
@@ -669,7 +789,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                     .orElseThrow(() -> new RuntimeException("Supply not found"));
 
             BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(payment.getAmount());
-            BigDecimal total = nvlMoney(supply.getTotal());
+            BigDecimal total = calculateSupplyTotal(supply);
             BigDecimal balance = total.subtract(newPaid);
 
             supply.setPaidAmount(newPaid);
@@ -740,6 +860,14 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     @Override
     public List<SupplierPaymentResponseDto> getPaymentsBySupply(Long supplyId) {
         return supplierPaymentRepository.findBySupplyIdOrderByPaymentDateDesc(supplyId)
+                .stream()
+                .map(this::mapSupplierPayment)
+                .toList();
+    }
+
+    @Override
+    public List<SupplierPaymentResponseDto> getPaymentsByPurchaseOrder(Long poId) {
+        return supplierPaymentRepository.findByPoId(poId)
                 .stream()
                 .map(this::mapSupplierPayment)
                 .toList();
@@ -845,9 +973,289 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         }
     }
 
+    private void updatePurchaseOrderStatusFromReceivedQty(Long poId) {
+        if (poId == null) return;
+
+        PurchaseOrder purchaseOrder = purchaseOrderRepository.findById(poId).orElse(null);
+        if (purchaseOrder == null || "CANCELLED".equalsIgnoreCase(purchaseOrder.getStatus())) {
+            return;
+        }
+
+        List<PurchaseOrderItem> items = purchaseOrderItemRepository.findByPoId(poId);
+        if (items.isEmpty()) {
+            return;
+        }
+
+        BigDecimal receivedTotal = items.stream()
+                .map(item -> nvlQty(item.getReceivedQty()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        String nextStatus;
+        if (receivedTotal.compareTo(BigDecimal.ZERO) <= 0) {
+            nextStatus = "PENDING";
+        } else {
+            boolean fullyReceived = items.stream()
+                    .allMatch(item -> nvlQty(item.getReceivedQty()).compareTo(nvlQty(item.getOrderedQty())) >= 0);
+            nextStatus = fullyReceived ? "COMPLETED" : "PARTIAL";
+        }
+
+        purchaseOrder.setStatus(nextStatus);
+        purchaseOrderRepository.save(purchaseOrder);
+    }
+
+    private void refreshPurchaseOrderReceivedQtyFromSupplies(Long poId) {
+        if (poId == null) return;
+
+        List<PurchaseOrderItem> poItems = purchaseOrderItemRepository.findByPoId(poId);
+        if (poItems.isEmpty()) {
+            return;
+        }
+
+        Map<String, BigDecimal> receivedByLine = new LinkedHashMap<>();
+        List<Supply> supplies = supplyRepository.findByPoId(poId);
+        if (supplies == null) {
+            supplies = List.of();
+        }
+
+        for (Supply supply : supplies) {
+            if (!isSupplyCountedForReceiving(supply)) {
+                continue;
+            }
+
+            for (SupplyProduct product : supplyProductRepository.findBySupplyId(supply.getSupplyId())) {
+                String key = poLineKey(product.getItemId(), product.getUnitId());
+                receivedByLine.merge(key, nvlQty(product.getQuantityReceived()), BigDecimal::add);
+            }
+        }
+
+        for (PurchaseOrderItem item : poItems) {
+            item.setReceivedQty(receivedByLine.getOrDefault(
+                    poLineKey(item.getItemId(), item.getUnitId()),
+                    BigDecimal.ZERO
+            ));
+            purchaseOrderItemRepository.save(item);
+        }
+    }
+
+    private boolean isSupplyCountedForReceiving(Supply supply) {
+        String status = supply.getStatus();
+        return status != null
+                && "COMPLETED".equalsIgnoreCase(status)
+                && !"CANCELLED".equalsIgnoreCase(status)
+                && !"VOID".equalsIgnoreCase(status)
+                && !"VOIDED".equalsIgnoreCase(status);
+    }
+
+    private BigDecimal calculatePurchaseOrderPaidAmount(Long poId) {
+        if (poId == null) {
+            return BigDecimal.ZERO;
+        }
+
+        List<SupplierPayment> directPayments = supplierPaymentRepository.findByPoId(poId);
+        if (directPayments == null) {
+            directPayments = List.of();
+        }
+
+        List<Supply> supplies = supplyRepository.findByPoId(poId);
+        if (supplies == null) {
+            supplies = List.of();
+        }
+
+        BigDecimal directPoPayments = directPayments
+                .stream()
+                .filter(payment -> payment.getSupplyId() == null)
+                .map(payment -> nvlMoney(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal supplyPayments = supplies
+                .stream()
+                .filter(supply -> !"CANCELLED".equalsIgnoreCase(supply.getStatus()))
+                .filter(supply -> !"VOID".equalsIgnoreCase(supply.getStatus()))
+                .filter(supply -> !"VOIDED".equalsIgnoreCase(supply.getStatus()))
+                .map(supply -> nvlMoney(supply.getPaidAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return directPoPayments.add(supplyPayments);
+    }
+
+    private BigDecimal calculatePurchaseOrderTotal(Long poId) {
+        if (poId == null) {
+            return BigDecimal.ZERO;
+        }
+
+        return purchaseOrderItemRepository.findByPoId(poId)
+                .stream()
+                .map(item -> nvlQty(item.getOrderedQty()).multiply(nvlMoney(item.getUnitCostEst())))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private boolean shouldUsePurchaseOrderPaymentsForSupply(Supply supply, BigDecimal supplyPayable) {
+        if (supply == null || supply.getPoId() == null || supply.getSupplyId() == null) {
+            return false;
+        }
+
+        BigDecimal purchaseOrderTotal = calculatePurchaseOrderTotal(supply.getPoId());
+        if (purchaseOrderTotal.compareTo(nvlMoney(supplyPayable)) != 0) {
+            return false;
+        }
+
+        List<Supply> linkedSupplies = supplyRepository.findByPoId(supply.getPoId());
+        if (linkedSupplies == null) {
+            return false;
+        }
+
+        List<Supply> activeSupplies = linkedSupplies.stream()
+                .filter(this::isSupplyActiveForPaymentReconciliation)
+                .toList();
+
+        return activeSupplies.size() == 1
+                && activeSupplies.get(0).getSupplyId().equals(supply.getSupplyId());
+    }
+
+    private boolean isSupplyActiveForPaymentReconciliation(Supply supply) {
+        if (supply == null) {
+            return false;
+        }
+
+        String status = supply.getStatus();
+        return status == null
+                || (!"CANCELLED".equalsIgnoreCase(status)
+                    && !"VOID".equalsIgnoreCase(status)
+                    && !"VOIDED".equalsIgnoreCase(status));
+    }
+
+    private Supply findActiveSupplyForPurchaseOrder(Long poId) {
+        if (poId == null) {
+            return null;
+        }
+
+        List<Supply> supplies = supplyRepository.findByPoId(poId);
+        if (supplies == null || supplies.isEmpty()) {
+            return null;
+        }
+
+        return supplies.stream()
+                .filter(this::isSupplyActiveForPaymentReconciliation)
+                .min(Comparator
+                        .comparing(
+                                Supply::getSupplyDate,
+                                Comparator.nullsLast(Comparator.naturalOrder())
+                        )
+                        .thenComparing(
+                                Supply::getSupplyId,
+                                Comparator.nullsLast(Comparator.naturalOrder())
+                        ))
+                .orElse(null);
+    }
+
+    private String resolvePurchaseOrderReceivingStatus(
+            List<PurchaseOrderItemResponseDto> items,
+            String orderStatus
+    ) {
+        if ("CANCELLED".equalsIgnoreCase(orderStatus)) {
+            return "CANCELLED";
+        }
+
+        if (items == null || items.isEmpty()) {
+            return "NOT_RECEIVED";
+        }
+
+        BigDecimal receivedTotal = items.stream()
+                .map(item -> nvlQty(item.getReceivedQty()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (receivedTotal.compareTo(BigDecimal.ZERO) <= 0) {
+            return "NOT_RECEIVED";
+        }
+
+        boolean fullyReceived = items.stream()
+                .allMatch(item -> nvlQty(item.getReceivedQty()).compareTo(nvlQty(item.getOrderedQty())) >= 0);
+
+        return fullyReceived ? "FULLY_RECEIVED" : "PARTIALLY_RECEIVED";
+    }
+
     // =========================
     // VALIDATION HELPERS
     // =========================
+
+    private void validatePurchaseOrderCanReceive(SupplyRequestDto dto) {
+        if (dto.getPoId() == null) {
+            return;
+        }
+
+        refreshPurchaseOrderReceivedQtyFromSupplies(dto.getPoId());
+
+        PurchaseOrder purchaseOrder = purchaseOrderRepository.findById(dto.getPoId())
+                .orElseThrow(() -> new RuntimeException("Purchase order not found"));
+
+        if (!purchaseOrder.getBranchId().equals(dto.getBranchId())) {
+            throw new RuntimeException("Purchase order does not belong to this branch");
+        }
+
+        if (!purchaseOrder.getSupplierId().equals(dto.getSupplierId())) {
+            throw new RuntimeException("Purchase order does not belong to this supplier");
+        }
+
+        if ("CANCELLED".equalsIgnoreCase(purchaseOrder.getStatus())) {
+            throw new RuntimeException("Cannot receive goods against a cancelled purchase order");
+        }
+
+        Map<String, BigDecimal> requestQtyByLine = new LinkedHashMap<>();
+        for (SupplyProductRequestDto product : dto.getProducts()) {
+            BigDecimal quantityReceived = nvlQty(product.getQuantityReceived());
+            if (quantityReceived.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Received quantity must be greater than zero");
+            }
+
+            String key = poLineKey(product.getItemId(), product.getUnitId());
+            requestQtyByLine.merge(key, quantityReceived, BigDecimal::add);
+        }
+
+        for (Map.Entry<String, BigDecimal> entry : requestQtyByLine.entrySet()) {
+            String[] keyParts = entry.getKey().split("-");
+            Long itemId = Long.valueOf(keyParts[0]);
+            Long unitId = Long.valueOf(keyParts[1]);
+
+            PurchaseOrderItem poItem = purchaseOrderItemRepository
+                    .findByPoIdAndItemIdAndUnitId(dto.getPoId(), itemId, unitId)
+                    .orElseThrow(() -> new RuntimeException(
+                            "Received item/unit is not on the purchase order: itemId="
+                                    + itemId + ", unitId=" + unitId
+                    ));
+
+            BigDecimal remainingQty = nvlQty(poItem.getOrderedQty())
+                    .subtract(nvlQty(poItem.getReceivedQty()));
+
+            if (entry.getValue().compareTo(remainingQty) > 0) {
+                throw new RuntimeException(
+                        "Received quantity exceeds remaining purchase order quantity for itemId="
+                                + itemId + ", unitId=" + unitId
+                );
+            }
+        }
+    }
+
+    private void validatePurchaseOrderPaymentLimit(Long poId, BigDecimal paymentAmount) {
+        if (poId == null) {
+            return;
+        }
+
+        BigDecimal amount = nvlMoney(paymentAmount);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        BigDecimal poTotal = calculatePurchaseOrderTotal(poId);
+        BigDecimal paidAmount = calculatePurchaseOrderPaidAmount(poId);
+
+        if (paidAmount.add(amount).compareTo(poTotal) > 0) {
+            throw new RuntimeException("Payment amount exceeds purchase order balance");
+        }
+    }
+
+    private String poLineKey(Long itemId, Long unitId) {
+        return itemId + "-" + unitId;
+    }
 
     private void validateItemAndUnit(Long branchId, Long itemId, Long unitId) {
         Item item = itemRepository.findByItemIdAndIsActiveTrue(itemId)
@@ -1060,6 +1468,49 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         }
 
         return "PARTIAL";
+    }
+
+    private String normalizePaymentMethod(String paymentMethod, String fallback) {
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            return fallback;
+        }
+
+        return paymentMethod.trim().toUpperCase();
+    }
+
+    private void createInitialSupplyPaymentIfNeeded(Supply supply, BigDecimal paidAmount, Long paidBy) {
+        createInitialSupplyPaymentIfNeeded(
+                supply,
+                paidAmount,
+                paidBy,
+                supply.getSupplyDate() != null ? supply.getSupplyDate() : LocalDateTime.now()
+        );
+    }
+
+    private void createInitialSupplyPaymentIfNeeded(
+            Supply supply,
+            BigDecimal paidAmount,
+            Long paidBy,
+            LocalDateTime paymentDate
+    ) {
+        BigDecimal amount = nvlMoney(paidAmount);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            return;
+        }
+
+        SupplierPayment payment = new SupplierPayment();
+        payment.setBranchId(supply.getBranchId());
+        payment.setSupplierId(supply.getSupplierId());
+        payment.setSupplyId(supply.getSupplyId());
+        payment.setPoId(supply.getPoId());
+        payment.setAmount(amount);
+        payment.setPaymentMethod(normalizePaymentMethod(supply.getPaymentMethod(), "CASH"));
+        payment.setPaymentDate(paymentDate != null ? paymentDate : LocalDateTime.now());
+        payment.setPaidBy(resolveUserId(paidBy));
+        payment.setReferenceNo(supply.getInvoiceNo());
+        payment.setNote("Initial payment recorded during GRN");
+
+        supplierPaymentRepository.save(payment);
     }
 
     // =========================
@@ -1398,7 +1849,8 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .itemName(item != null ? item.getName() : null)
                 .sku(item != null ? item.getSku() : null)
                 .unitId(supplierItem.getUnitId())
-                .unitName(unit != null ? unit.getUnitName() : null)
+                .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                .unitName(resolveUnitName(unit))
                 .lastPurchaseCost(supplierItem.getLastPurchaseCost())
                 .defaultCostPrice(supplierItem.getDefaultCostPrice())
                 .isPreferred(supplierItem.getIsPreferred())
@@ -1414,6 +1866,7 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .branchId(payment.getBranchId())
                 .supplierId(payment.getSupplierId())
                 .supplyId(payment.getSupplyId())
+                .poId(payment.getPoId())
                 .amount(payment.getAmount())
                 .paymentMethod(payment.getPaymentMethod())
                 .paymentDate(payment.getPaymentDate())
@@ -1544,16 +1997,43 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
 }
 
 private PurchaseReturnItemResponseDto mapPurchaseReturnItem(PurchaseReturnItem item) {
+    ItemUnit unit = findItemUnit(item.getItemId(), item.getUnitId());
     return PurchaseReturnItemResponseDto.builder()
             .purchaseReturnItemId(item.getPurchaseReturnItemId())
             .purchaseReturnId(item.getPurchaseReturnId())
             .itemId(item.getItemId())
             .unitId(item.getUnitId())
+            .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+            .unitName(resolveUnitName(unit))
             .internalBatchBarcode(item.getInternalBatchBarcode())
             .returnStockType(item.getReturnStockType())
             .quantity(item.getQuantity())
             .unitCost(item.getUnitCost())
             .lineTotal(item.getLineTotal())
             .build();
+}
+
+private ItemUnit findItemUnit(Long itemId, Long unitId) {
+    if (itemId == null || unitId == null) {
+        return null;
+    }
+
+    return itemUnitRepository.findById(unitId)
+            .filter(unit -> itemId.equals(unit.getItemId()))
+            .orElse(null);
+}
+
+private String resolveUnitName(ItemUnit unit) {
+    if (unit == null) {
+        return null;
+    }
+
+    if (unit.getMasterUnitId() != null) {
+        return unitMasterRepository.findById(unit.getMasterUnitId())
+                .map(UnitMaster::getName)
+                .orElse(unit.getUnitName());
+    }
+
+    return unit.getUnitName();
 }
 }

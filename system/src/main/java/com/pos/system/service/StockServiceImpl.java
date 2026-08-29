@@ -5,6 +5,7 @@ import com.pos.system.model.catalog.Brand;
 import com.pos.system.model.catalog.Category;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.*;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
@@ -33,6 +34,7 @@ public class StockServiceImpl implements StockService {
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
     private final CategoryRepository categoryRepository;
     private final BrandRepository brandRepository;
     private final UnitConversionService unitConversionService;
@@ -592,7 +594,8 @@ public class StockServiceImpl implements StockService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         return StockResponseDto.UnitStockDto.builder()
                 .unitId(unit.getUnitId())
-                .unitName(unit.getUnitName())
+                .masterUnitId(unit.getMasterUnitId())
+                .unitName(resolveUnitName(unit))
                 .unitBarcode(unit.getBarcode())
                 .multiplierToBase(unit.getMultiplierToBase())
                 .defaultSellingPrice(unit.getDefaultSellingPrice())
@@ -681,7 +684,8 @@ public class StockServiceImpl implements StockService {
                 .itemName(item != null ? item.getName() : null)
                 .supplyProductId(batch.getSupplyProductId())
                 .unitId(batch.getUnitId())
-                .unitName(unit != null ? unit.getUnitName() : null)
+                .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                .unitName(resolveUnitName(unit))
                 .unitBarcode(unit != null ? unit.getBarcode() : null)
                 .unitMultiplierToBase(unit != null ? unit.getMultiplierToBase() : null)
                 .unitIsBaseUnit(unit != null ? unit.getIsBaseUnit() : null)
@@ -699,6 +703,20 @@ public class StockServiceImpl implements StockService {
                 .sellingPrice(batch.getSellingPrice())
                 .createdAt(batch.getCreatedAt())
                 .build();
+    }
+
+    private String resolveUnitName(ItemUnit unit) {
+        if (unit == null) {
+            return null;
+        }
+
+        if (unit.getMasterUnitId() != null) {
+            return unitMasterRepository.findById(unit.getMasterUnitId())
+                    .map(UnitMaster::getName)
+                    .orElse(unit.getUnitName());
+        }
+
+        return unit.getUnitName();
     }
 
     private StockMovementResponseDto mapMovement(StockMovement movement) {

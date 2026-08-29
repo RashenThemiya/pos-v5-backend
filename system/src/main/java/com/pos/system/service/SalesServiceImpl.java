@@ -5,6 +5,7 @@ import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleBarcodeSetting;
 import com.pos.system.model.catalog.ScaleItemMapping;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.promotion.Promotion;
 import com.pos.system.model.promotion.PromotionBatch;
@@ -45,6 +46,7 @@ public class SalesServiceImpl implements SalesService {
     private final StockMovementRepository stockMovementRepository;
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
     private final ItemRepository itemRepository;
     private final ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
     private final ScaleItemMappingRepository scaleItemMappingRepository;
@@ -614,7 +616,7 @@ public class SalesServiceImpl implements SalesService {
                 .barcode(barcode)
                 .scaleItemCode(scaleItemCode)
                 .quantity(quantity)
-                .quantityUnit(unit.getUnitName())
+                .quantityUnit(resolveUnitName(unit))
                 .encodedPrice(encodedPrice)
                 .build();
 
@@ -707,7 +709,8 @@ public class SalesServiceImpl implements SalesService {
     private SaleProductSearchResponse.UnitDto mapSearchUnit(ItemUnit unit) {
         return SaleProductSearchResponse.UnitDto.builder()
                 .unitId(unit.getUnitId())
-                .unitName(unit.getUnitName())
+                .masterUnitId(unit.getMasterUnitId())
+                .unitName(resolveUnitName(unit))
                 .multiplierToBase(unit.getMultiplierToBase())
                 .barcode(unit.getBarcode())
                 .defaultSellingPrice(unit.getDefaultSellingPrice())
@@ -730,7 +733,8 @@ public class SalesServiceImpl implements SalesService {
                 .stockBatchId(batch.getStockBatchId())
                 .supplyProductId(batch.getSupplyProductId())
                 .unitId(batch.getUnitId())
-                .unitName(unit != null ? unit.getUnitName() : null)
+                .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                .unitName(resolveUnitName(unit))
                 .unitBarcode(unit != null ? unit.getBarcode() : null)
                 .receivedQty(batch.getReceivedQty())
                 .receivedBaseQty(batch.getReceivedBaseQty())
@@ -869,8 +873,7 @@ public class SalesServiceImpl implements SalesService {
     private OrderProductResponse mapOrderProduct(OrderProduct op) {
         String itemName = itemRepository.findById(op.getItemId())
                 .map(i -> i.getName()).orElse(null);
-        String unitName = itemUnitRepository.findByUnitIdAndIsActiveTrue(op.getUnitId())
-                .map(u -> u.getUnitName()).orElse(null);
+        ItemUnit unit = itemUnitRepository.findById(op.getUnitId()).orElse(null);
 
         return OrderProductResponse.builder()
                 .orderProductId(op.getOrderProductId())
@@ -878,7 +881,8 @@ public class SalesServiceImpl implements SalesService {
                 .itemId(op.getItemId())
                 .itemName(itemName)
                 .unitId(op.getUnitId())
-                .unitName(unitName)
+                .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                .unitName(resolveUnitName(unit))
                 .batchBarcode(op.getBatchBarcode())
                 .quantity(op.getQuantity())
                 .unitPrice(op.getUnitPrice())
@@ -886,6 +890,20 @@ public class SalesServiceImpl implements SalesService {
                 .lineTotal(op.getLineTotal())
                 .createdAt(op.getCreatedAt())
                 .build();
+    }
+
+    private String resolveUnitName(ItemUnit unit) {
+        if (unit == null) {
+            return null;
+        }
+
+        if (unit.getMasterUnitId() != null) {
+            return unitMasterRepository.findById(unit.getMasterUnitId())
+                    .map(UnitMaster::getName)
+                    .orElse(unit.getUnitName());
+        }
+
+        return unit.getUnitName();
     }
 
     private PaymentResponse mapPayment(Payment p) {

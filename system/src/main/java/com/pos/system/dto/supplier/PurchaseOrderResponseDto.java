@@ -21,5 +21,9 @@ public class PurchaseOrderResponseDto {
     private LocalDateTime createdAt;
     private String note;
     private BigDecimal totalAmount;
+    private BigDecimal paidAmount;
+    private BigDecimal balanceAmount;
+    private String receivingStatus;
+    private String paymentStatus;
     private List<PurchaseOrderItemResponseDto> items;
 }

@@ -18,6 +18,7 @@ public class OrderProductResponse {
     private Long itemId;
     private String itemName;
     private Long unitId;
+    private Long masterUnitId;
     private String unitName;
     private String batchBarcode;
     private BigDecimal quantity;

@@ -52,6 +52,7 @@ public class SaleProductSearchResponse {
     @Builder
     public static class UnitDto {
         private Long unitId;
+        private Long masterUnitId;
         private String unitName;
         private BigDecimal multiplierToBase;
         private String barcode;
@@ -74,6 +75,7 @@ public class SaleProductSearchResponse {
         private Long stockBatchId;
         private Long supplyProductId;
         private Long unitId;
+        private Long masterUnitId;
         private String unitName;
         private String unitBarcode;
         private BigDecimal receivedQty;

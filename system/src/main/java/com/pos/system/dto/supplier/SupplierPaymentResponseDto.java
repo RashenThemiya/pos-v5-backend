@@ -14,6 +14,7 @@ public class SupplierPaymentResponseDto {
     private Long branchId;
     private Long supplierId;
     private Long supplyId;
+    private Long poId;
 
     private BigDecimal amount;
     private String paymentMethod;

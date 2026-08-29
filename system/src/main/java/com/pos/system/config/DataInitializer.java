@@ -5,10 +5,12 @@ import com.pos.system.model.auth.AuthorizationStatus;
 import com.pos.system.model.auth.AuthorizationType;
 import com.pos.system.model.auth.User;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.repository.AuthorizationRepository;
 import com.pos.system.repository.ItemUnitRepository;
 import com.pos.system.repository.StockRepository;
+import com.pos.system.repository.UnitMasterRepository;
 import com.pos.system.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.boot.CommandLineRunner;
@@ -27,6 +29,7 @@ public class DataInitializer implements CommandLineRunner {
     private final UserRepository userRepository;
     private final StockRepository stockRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final UnitMasterRepository unitMasterRepository;
     private final PasswordEncoder passwordEncoder;
     private final JdbcTemplate jdbcTemplate;
 
@@ -36,6 +39,7 @@ public class DataInitializer implements CommandLineRunner {
         repairRolePermissionUniqueIndex();
         repairPurchaseOrderItemUniqueIndex();
         migrateRolePermissionAuthorityCodes();
+        migrateItemUnitsToMasterUnits();
 
         // create default SUPERADMIN only when no auth records exist
         if (authorizationRepository.count() == 0) {
@@ -247,6 +251,57 @@ public class DataInitializer implements CommandLineRunner {
             }
 
             System.out.println("Stock migration completed.");
+        }
+    }
+
+    private void migrateItemUnitsToMasterUnits() {
+        if (!tableExists("item_units") || !columnExists("item_units", "master_unit_id")) {
+            return;
+        }
+
+        List<ItemUnit> itemUnits = itemUnitRepository.findAll();
+        int migrated = 0;
+
+        for (ItemUnit itemUnit : itemUnits) {
+            if (itemUnit.getBranchId() == null || itemUnit.getUnitName() == null || itemUnit.getUnitName().trim().isEmpty()) {
+                continue;
+            }
+
+            String normalizedName = itemUnit.getUnitName().trim().toUpperCase();
+            UnitMaster masterUnit = unitMasterRepository.findByBranchId(itemUnit.getBranchId())
+                    .stream()
+                    .filter(unit -> normalizedName.equals(unit.getName()))
+                    .findFirst()
+                    .orElseGet(() -> {
+                        UnitMaster unit = new UnitMaster();
+                        unit.setBranchId(itemUnit.getBranchId());
+                        unit.setName(normalizedName);
+                        unit.setIsActive(true);
+                        unit.setCreatedAt(java.time.LocalDateTime.now());
+                        unit.setUpdatedAt(java.time.LocalDateTime.now());
+                        return unitMasterRepository.save(unit);
+                    });
+
+            boolean changed = false;
+            if (itemUnit.getMasterUnitId() == null || !itemUnit.getMasterUnitId().equals(masterUnit.getUnitId())) {
+                itemUnit.setMasterUnitId(masterUnit.getUnitId());
+                changed = true;
+            }
+
+            if (!normalizedName.equals(itemUnit.getUnitName())) {
+                itemUnit.setUnitName(normalizedName);
+                changed = true;
+            }
+
+            if (changed) {
+                itemUnit.setUpdatedAt(java.time.LocalDateTime.now());
+                itemUnitRepository.save(itemUnit);
+                migrated++;
+            }
+        }
+
+        if (migrated > 0) {
+            System.out.println("Migrated " + migrated + " item unit records to Unit Master.");
         }
     }
 }
