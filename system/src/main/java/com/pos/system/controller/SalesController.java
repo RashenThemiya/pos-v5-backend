@@ -35,13 +35,13 @@ public class SalesController {
         return ResponseEntity.ok(salesService.createOrder(request));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
     @GetMapping("/orders/{orderId}")
     public ResponseEntity<OrderResponse> getOrderById(@PathVariable Long orderId) {
         return ResponseEntity.ok(salesService.getOrderById(orderId));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
     @GetMapping("/orders/invoice/{invoiceNo}")
     public ResponseEntity<OrderResponse> getOrderByInvoiceNo(@PathVariable String invoiceNo) {
         return ResponseEntity.ok(salesService.getOrderByInvoiceNo(invoiceNo));
@@ -61,7 +61,7 @@ public class SalesController {
         return ResponseEntity.ok(salesService.searchProductsForSale(branchId, query));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
     @GetMapping("/orders/branch/{branchId}/session/{sessionId}")
     public ResponseEntity<List<OrderResponse>> getOrdersBySession(@PathVariable Long branchId,
                                                                    @PathVariable Long sessionId) {

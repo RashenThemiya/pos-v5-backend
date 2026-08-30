@@ -260,21 +260,32 @@ public class SalesServiceImpl implements SalesService {
         if ("PAID".equals(order.getPaymentStatus())) {
             throw new RuntimeException("Order is already fully paid");
         }
+        if (request.getPayments() == null || request.getPayments().isEmpty()) {
+            throw new RuntimeException("At least one payment line is required");
+        }
 
-        BigDecimal totalPaid = BigDecimal.ZERO;
+        BigDecimal orderTotal = nvl(order.getTotal());
+        BigDecimal runningPaid = paymentRepository.findByOrderId(orderId).stream()
+                .map(payment -> nvl(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (runningPaid.compareTo(orderTotal) >= 0) {
+            throw new RuntimeException("Order is already fully paid");
+        }
+
         for (PaymentRequest.PaymentLineDto line : request.getPayments()) {
+            BigDecimal remainingDue = orderTotal.subtract(runningPaid).max(BigDecimal.ZERO);
+            BigDecimal appliedAmount = resolveAppliedPaymentAmount(line, remainingDue);
+            BigDecimal tenderedAmount = resolveTenderedAmount(line, appliedAmount);
+
             Payment payment = new Payment();
             payment.setBranchId(order.getBranchId());
             payment.setOrderId(orderId);
             payment.setCustomerId(order.getCustomerId());
             payment.setCashSessionId(order.getCashSessionId());
-            payment.setAmount(line.getAmount());
-            payment.setTenderedAmount(line.getTenderedAmount());
-            payment.setChangeAmount(
-                    line.getTenderedAmount() != null
-                            ? line.getTenderedAmount().subtract(line.getAmount()).max(BigDecimal.ZERO)
-                            : BigDecimal.ZERO
-            );
+            payment.setAmount(appliedAmount);
+            payment.setTenderedAmount(tenderedAmount);
+            payment.setChangeAmount(resolveChangeAmount(line, tenderedAmount, appliedAmount));
             payment.setPaymentMethod(line.getPaymentMethod());
             payment.setPaymentDate(LocalDateTime.now());
             payment.setReceivedBy(request.getReceivedBy());
@@ -282,7 +293,7 @@ public class SalesServiceImpl implements SalesService {
             payment.setNote(line.getNote());
             Payment savedPayment = paymentRepository.save(payment);
 
-            totalPaid = totalPaid.add(line.getAmount());
+            runningPaid = runningPaid.add(appliedAmount);
 
             if ("CREDIT".equalsIgnoreCase(line.getPaymentMethod())) {
                 if (order.getCustomerId() == null) {
@@ -290,7 +301,7 @@ public class SalesServiceImpl implements SalesService {
                 }
                 customerService.recordCreditSale(
                         order.getCustomerId(),
-                        line.getAmount(),
+                        appliedAmount,
                         order.getOrderId(),
                         order.getInvoiceNo(),
                         request.getReceivedBy()
@@ -302,7 +313,7 @@ public class SalesServiceImpl implements SalesService {
                 CashSessionTransaction txn = new CashSessionTransaction();
                 txn.setSessionId(order.getCashSessionId());
                 txn.setType("SALE");
-                txn.setAmount(line.getAmount());
+                txn.setAmount(appliedAmount);
                 txn.setPaymentMethod(line.getPaymentMethod());
                 txn.setPaymentId(savedPayment.getPaymentId());
                 txn.setOrderId(order.getOrderId());
@@ -315,11 +326,7 @@ public class SalesServiceImpl implements SalesService {
         }
 
         // update payment status
-        BigDecimal alreadyPaid = paymentRepository.findByOrderId(orderId).stream()
-                .map(Payment::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-        if (alreadyPaid.compareTo(nvl(order.getTotal())) >= 0) {
+        if (runningPaid.compareTo(orderTotal) >= 0) {
             order.setPaymentStatus("PAID");
         } else {
             order.setPaymentStatus("PARTIAL");
@@ -799,6 +806,62 @@ public class SalesServiceImpl implements SalesService {
         target.setReferenceNo(source.getReferenceNo());
         target.setNote(source.getNote());
         return target;
+    }
+
+    private BigDecimal resolveAppliedPaymentAmount(PaymentRequest.PaymentLineDto line, BigDecimal remainingDue) {
+        if (remainingDue.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Order is already fully paid");
+        }
+
+        BigDecimal requestedAmount = nvl(line.getAmount());
+        if (requestedAmount.compareTo(BigDecimal.ZERO) <= 0 && isCashPayment(line.getPaymentMethod())) {
+            requestedAmount = nvl(line.getTenderedAmount());
+        }
+
+        if (requestedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Payment amount must be greater than 0");
+        }
+
+        if (requestedAmount.compareTo(remainingDue) > 0) {
+            if (isCashPayment(line.getPaymentMethod())) {
+                return remainingDue;
+            }
+            throw new RuntimeException("Payment amount exceeds order balance");
+        }
+
+        return requestedAmount;
+    }
+
+    private BigDecimal resolveTenderedAmount(PaymentRequest.PaymentLineDto line, BigDecimal appliedAmount) {
+        if (!isCashPayment(line.getPaymentMethod())) {
+            return line.getTenderedAmount();
+        }
+
+        BigDecimal tenderedAmount = line.getTenderedAmount() != null
+                ? line.getTenderedAmount()
+                : nvl(line.getAmount());
+
+        if (tenderedAmount.compareTo(appliedAmount) < 0) {
+            throw new RuntimeException("Cash tendered amount cannot be less than the payment amount");
+        }
+
+        return tenderedAmount;
+    }
+
+    private BigDecimal resolveChangeAmount(
+            PaymentRequest.PaymentLineDto line,
+            BigDecimal tenderedAmount,
+            BigDecimal appliedAmount
+    ) {
+        if (!isCashPayment(line.getPaymentMethod()) || tenderedAmount == null) {
+            return BigDecimal.ZERO;
+        }
+
+        return tenderedAmount.subtract(appliedAmount).max(BigDecimal.ZERO);
+    }
+
+    private boolean isCashPayment(String paymentMethod) {
+        return "CASH".equalsIgnoreCase(paymentMethod);
     }
 
     private String generateInvoiceNo(Long branchId) {

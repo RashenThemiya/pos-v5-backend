@@ -6,6 +6,8 @@ import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.UnitMaster;
+import com.pos.system.model.sale.CustomerOrder;
+import com.pos.system.model.sale.Payment;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
 import com.pos.system.model.stock.StockMovement;
@@ -59,6 +61,8 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private final CashSessionRepository cashSessionRepository;
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
+    private final CustomerOrderRepository orderRepository;
+    private final PaymentRepository paymentRepository;
 
     private final PurchaseReturnRepository purchaseReturnRepository;
 private final PurchaseReturnItemRepository purchaseReturnItemRepository;
@@ -721,6 +725,11 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
             if (!"OPEN".equalsIgnoreCase(cashSession.getStatus())) {
                 throw new RuntimeException("Cash session is not OPEN");
+            }
+
+            BigDecimal availableCash = calculateAvailableCash(cashSession);
+            if (dto.getAmount().compareTo(availableCash) > 0) {
+                throw new RuntimeException("Supplier cash payment exceeds available cash in drawer");
             }
 
             cashSessionId = cashSession.getSessionId();
@@ -1446,6 +1455,89 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     // =========================
     // PAYMENT HELPERS
     // =========================
+
+    private BigDecimal calculateAvailableCash(CashSession cashSession) {
+        Long sessionId = cashSession.getSessionId();
+        List<CashSessionTransaction> txns = cashSessionTransactionRepository.findBySessionIdOrderByCreatedAtDesc(sessionId);
+
+        BigDecimal cashSales = calculateCashSales(sessionId, txns);
+        BigDecimal expenses = sumCashTransactionsByType(txns, "EXPENSE");
+        BigDecimal withdrawals = sumCashTransactionsByType(txns, "WITHDRAWAL");
+        BigDecimal supplierPayments = sumCashTransactionsByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
+        BigDecimal supplierRefunds = sumCashTransactionsByType(txns, "SUPPLIER_REFUND_IN");
+
+        return nvlMoney(cashSession.getOpeningCash())
+                .add(cashSales)
+                .add(supplierRefunds)
+                .subtract(expenses)
+                .subtract(withdrawals)
+                .subtract(supplierPayments)
+                .max(BigDecimal.ZERO);
+    }
+
+    private BigDecimal calculateCashSales(Long sessionId, List<CashSessionTransaction> txns) {
+        List<CustomerOrder> orders = orderRepository.findByCashSessionIdOrderByOrderDateDesc(sessionId)
+                .stream()
+                .filter(order -> "COMPLETED".equalsIgnoreCase(order.getStatus()))
+                .toList();
+
+        Set<Long> orderIds = new HashSet<>();
+        Set<String> invoiceNos = new HashSet<>();
+
+        BigDecimal reconciledCashSales = orders.stream()
+                .peek(order -> {
+                    if (order.getOrderId() != null) orderIds.add(order.getOrderId());
+                    if (order.getInvoiceNo() != null) invoiceNos.add(order.getInvoiceNo());
+                })
+                .map(order -> calculateOrderCashSale(sessionId, order))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal legacyCashSales = txns.stream()
+                .filter(t -> "SALE".equals(t.getType()) && isCashPayment(t.getPaymentMethod()))
+                .filter(t -> t.getOrderId() == null || !orderIds.contains(t.getOrderId()))
+                .filter(t -> t.getInvoiceNo() == null || !invoiceNos.contains(t.getInvoiceNo()))
+                .map(t -> nvlMoney(t.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return reconciledCashSales.add(legacyCashSales);
+    }
+
+    private BigDecimal calculateOrderCashSale(Long sessionId, CustomerOrder order) {
+        List<Payment> payments = paymentRepository.findByOrderId(order.getOrderId());
+        BigDecimal cashPaid = payments.stream()
+                .filter(payment -> payment.getCashSessionId() == null || payment.getCashSessionId().equals(sessionId))
+                .filter(payment -> isCashPayment(payment.getPaymentMethod()))
+                .map(payment -> nvlMoney(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal nonCashPaid = payments.stream()
+                .filter(payment -> !isCashPayment(payment.getPaymentMethod()))
+                .map(payment -> nvlMoney(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal cashShareOfInvoice = nvlMoney(order.getTotal()).subtract(nonCashPaid).max(BigDecimal.ZERO);
+        return cashPaid.min(cashShareOfInvoice);
+    }
+
+    private boolean isCashPayment(String paymentMethod) {
+        return "CASH".equalsIgnoreCase(paymentMethod)
+                || "COUNTER_CASH".equalsIgnoreCase(paymentMethod);
+    }
+
+    private BigDecimal sumCashTransactionsByType(List<CashSessionTransaction> txns, String type) {
+        return txns.stream()
+                .filter(t -> type.equals(t.getType()))
+                .map(t -> nvlMoney(t.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal sumCashTransactionsByTypes(List<CashSessionTransaction> txns, String... types) {
+        Set<String> included = Set.of(types);
+        return txns.stream()
+                .filter(t -> included.contains(t.getType()))
+                .map(t -> nvlMoney(t.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
 
     private boolean requiresCashSession(String paymentMethod) {
         if (paymentMethod == null) return false;

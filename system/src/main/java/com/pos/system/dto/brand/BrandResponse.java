@@ -3,6 +3,7 @@ package com.pos.system.dto.brand;
 import lombok.Data;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 public class BrandResponse {
@@ -11,4 +12,6 @@ public class BrandResponse {
     private String name;
     private Boolean isActive;
     private LocalDateTime createdAt;
+    private List<Long> categoryIds;
+    private List<String> categoryNames;
 }

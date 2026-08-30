@@ -185,9 +185,48 @@ class SalesServiceImplReturnTest {
         verify(cashSessionTransactionRepository).save(txnCaptor.capture());
         CashSessionTransaction txn = txnCaptor.getValue();
         assertThat(txn.getType()).isEqualTo("SALE");
+        assertThat(txn.getAmount()).isEqualByComparingTo("300.00");
         assertThat(txn.getOrderId()).isEqualTo(1L);
         assertThat(txn.getInvoiceNo()).isEqualTo("INV-0001");
         assertThat(txn.getPaymentId()).isEqualTo(55L);
+    }
+
+    @Test
+    void processPayment_withOverTenderedCash_recordsInvoiceBalanceAsRevenue() {
+        CustomerOrder order = completedOrder();
+        order.setPaymentStatus("UNPAID");
+        order.setTotal(new BigDecimal("300.00"));
+        when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            if (p.getPaymentId() == null) p.setPaymentId(57L);
+            return p;
+        });
+        when(paymentRepository.findByOrderId(1L)).thenReturn(List.of());
+        when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of());
+
+        PaymentRequest.PaymentLineDto line = new PaymentRequest.PaymentLineDto();
+        line.setPaymentMethod("CASH");
+        line.setAmount(new BigDecimal("500.00"));
+        line.setTenderedAmount(new BigDecimal("500.00"));
+
+        PaymentRequest request = new PaymentRequest();
+        request.setReceivedBy(7L);
+        request.setPayments(List.of(line));
+
+        salesService.processPayment(1L, request);
+
+        ArgumentCaptor<Payment> paymentCaptor = ArgumentCaptor.forClass(Payment.class);
+        verify(paymentRepository).save(paymentCaptor.capture());
+        Payment payment = paymentCaptor.getValue();
+        assertThat(payment.getAmount()).isEqualByComparingTo("300.00");
+        assertThat(payment.getTenderedAmount()).isEqualByComparingTo("500.00");
+        assertThat(payment.getChangeAmount()).isEqualByComparingTo("200.00");
+
+        ArgumentCaptor<CashSessionTransaction> txnCaptor = ArgumentCaptor.forClass(CashSessionTransaction.class);
+        verify(cashSessionTransactionRepository).save(txnCaptor.capture());
+        assertThat(txnCaptor.getValue().getAmount()).isEqualByComparingTo("300.00");
+        assertThat(order.getPaymentStatus()).isEqualTo("PAID");
     }
 
     @Test

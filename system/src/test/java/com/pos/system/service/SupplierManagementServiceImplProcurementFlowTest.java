@@ -7,8 +7,12 @@ import com.pos.system.dto.supplier.SupplierPaymentRequestDto;
 import com.pos.system.dto.supplier.SupplyResponseDto;
 import com.pos.system.dto.supplier.SupplyProductRequestDto;
 import com.pos.system.dto.supplier.SupplyRequestDto;
+import com.pos.system.model.cash.CashSession;
+import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.sale.CustomerOrder;
+import com.pos.system.model.sale.Payment;
 import com.pos.system.model.supplier.PurchaseOrder;
 import com.pos.system.model.supplier.PurchaseOrderItem;
 import com.pos.system.model.supplier.Supplier;
@@ -19,8 +23,10 @@ import com.pos.system.model.supplier.Supply;
 import com.pos.system.model.supplier.SupplyProduct;
 import com.pos.system.repository.CashSessionRepository;
 import com.pos.system.repository.CashSessionTransactionRepository;
+import com.pos.system.repository.CustomerOrderRepository;
 import com.pos.system.repository.ItemRepository;
 import com.pos.system.repository.ItemUnitRepository;
+import com.pos.system.repository.PaymentRepository;
 import com.pos.system.repository.PurchaseOrderItemRepository;
 import com.pos.system.repository.PurchaseOrderRepository;
 import com.pos.system.repository.PurchaseReturnItemRepository;
@@ -86,6 +92,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private UnitConversionService unitConversionService;
     @Mock private CashSessionRepository cashSessionRepository;
     @Mock private CashSessionTransactionRepository cashSessionTransactionRepository;
+    @Mock private CustomerOrderRepository orderRepository;
+    @Mock private PaymentRepository paymentRepository;
     @Mock private PurchaseReturnRepository purchaseReturnRepository;
     @Mock private PurchaseReturnItemRepository purchaseReturnItemRepository;
 
@@ -120,6 +128,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 unitConversionService,
                 cashSessionRepository,
                 cashSessionTransactionRepository,
+                orderRepository,
+                paymentRepository,
                 purchaseReturnRepository,
                 purchaseReturnItemRepository
         );
@@ -249,6 +259,9 @@ class SupplierManagementServiceImplProcurementFlowTest {
             }
             return transaction;
         });
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(anyLong())).thenReturn(List.of());
+        when(paymentRepository.findByOrderId(anyLong())).thenReturn(List.of());
+        when(cashSessionTransactionRepository.findBySessionIdOrderByCreatedAtDesc(anyLong())).thenReturn(List.of());
     }
 
     @Test
@@ -278,6 +291,60 @@ class SupplierManagementServiceImplProcurementFlowTest {
         assertThat(fullyPaid.getReceivingStatus()).isEqualTo("NOT_RECEIVED");
         assertThat(fullyPaid.getPaymentStatus()).isEqualTo("PAID");
         assertThat(fullyPaid.getBalanceAmount()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void supplierCashPaymentCannotExceedAvailableCashDrawerAmount() {
+        CashSession session = openCashSession("5000.00");
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+
+        SupplierPaymentRequestDto request = paymentRequest("5001.00");
+        request.setPaymentMethod("CASH");
+        request.setCashSessionId(10L);
+
+        assertThatThrownBy(() -> service.createSupplierPayment(request))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessageContaining("exceeds available cash");
+    }
+
+    @Test
+    void supplierCashPaymentUsesCorrectedCashSalesWhenCheckingDrawerAvailability() {
+        CashSession session = openCashSession("6200.00");
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+
+        CustomerOrder order = new CustomerOrder();
+        order.setOrderId(77L);
+        order.setInvoiceNo("INV-77");
+        order.setCashSessionId(10L);
+        order.setStatus("COMPLETED");
+        order.setTotal(new BigDecimal("300.00"));
+
+        Payment payment = new Payment();
+        payment.setOrderId(77L);
+        payment.setCashSessionId(10L);
+        payment.setPaymentMethod("CASH");
+        payment.setAmount(new BigDecimal("500.00"));
+        payment.setTenderedAmount(new BigDecimal("500.00"));
+
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of(order));
+        when(paymentRepository.findByOrderId(77L)).thenReturn(List.of(payment));
+
+        CashSessionTransaction supplierOut = new CashSessionTransaction();
+        supplierOut.setSessionId(10L);
+        supplierOut.setType("SUPPLIER_PAYMENT_OUT");
+        supplierOut.setAmount(new BigDecimal("6000.00"));
+        supplierOut.setPaymentMethod("CASH");
+        when(cashSessionTransactionRepository.findBySessionIdOrderByCreatedAtDesc(10L))
+                .thenReturn(List.of(supplierOut));
+
+        SupplierPaymentRequestDto request = paymentRequest("500.00");
+        request.setPaymentMethod("CASH");
+        request.setCashSessionId(10L);
+
+        service.createSupplierPayment(request);
+
+        assertThat(supplierPayments).hasSize(1);
+        assertThat(supplierPayments.get(0).getAmount()).isEqualByComparingTo("500.00");
     }
 
     @Test
@@ -575,6 +642,16 @@ class SupplierManagementServiceImplProcurementFlowTest {
         SupplierPaymentRequestDto request = paymentRequest(amount);
         request.setSupplyId(supplyId);
         service.createSupplierPayment(request);
+    }
+
+    private CashSession openCashSession(String openingCash) {
+        CashSession session = new CashSession();
+        session.setSessionId(10L);
+        session.setCounterId(1L);
+        session.setOpenedBy(USER_ID);
+        session.setOpeningCash(new BigDecimal(openingCash));
+        session.setStatus("OPEN");
+        return session;
     }
 
     private SupplierPaymentRequestDto paymentRequest(String amount) {
