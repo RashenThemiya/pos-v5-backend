@@ -23,6 +23,8 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
 
     List<CustomerOrder> findByBranchIdAndCashSessionIdOrderByOrderDateDesc(Long branchId, Long cashSessionId);
 
+    List<CustomerOrder> findByCashSessionIdOrderByOrderDateDesc(Long cashSessionId);
+
     List<CustomerOrder> findByBranchIdAndCustomerIdOrderByOrderDateDesc(Long branchId, Long customerId);
 
     List<CustomerOrder> findByBranchIdAndOrderDateBetweenOrderByOrderDateDesc(
