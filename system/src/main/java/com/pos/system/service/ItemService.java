@@ -5,6 +5,7 @@ import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
 import com.pos.system.dto.item.ItemUnitResponse;
+import com.pos.system.model.catalog.Brand;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ScaleItemMapping;
@@ -38,6 +39,7 @@ public class ItemService {
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
     private final BrandRepository brandRepository;
+    private final BrandCategoryRepository brandCategoryRepository;
 
     private final FileStorageService fileStorageService;
 
@@ -346,8 +348,9 @@ public class ItemService {
         }
 
         if (request.getBrandId() != null) {
-            brandRepository.findByBrandIdAndBranchId(request.getBrandId(), request.getBranchId())
+            Brand brand = brandRepository.findByBrandIdAndBranchId(request.getBrandId(), request.getBranchId())
                     .orElseThrow(() -> new RuntimeException("Brand not found in this branch"));
+            validateBrandCategory(request, existingItem, brand);
         }
 
         ItemUnitRequest unit = buildBaseUnitRequest(request);
@@ -400,6 +403,25 @@ public class ItemService {
         item.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
         item.setMinStock(request.getMinStock());
         item.setMaxStock(request.getMaxStock());
+    }
+
+    private void validateBrandCategory(ItemRequest request, Item existingItem, Brand brand) {
+        if (request.getCategoryId() == null) {
+            return;
+        }
+
+        boolean categoryChanged = existingItem == null
+                || !request.getCategoryId().equals(existingItem.getCategoryId());
+        boolean brandChanged = existingItem == null
+                || !request.getBrandId().equals(existingItem.getBrandId());
+
+        if (!categoryChanged && !brandChanged) {
+            return;
+        }
+
+        if (!brandCategoryRepository.existsByBrandIdAndCategoryId(brand.getBrandId(), request.getCategoryId())) {
+            throw new RuntimeException("Brand is not mapped to the selected category");
+        }
     }
 
     private ItemUnitRequest buildBaseUnitRequest(ItemRequest request) {

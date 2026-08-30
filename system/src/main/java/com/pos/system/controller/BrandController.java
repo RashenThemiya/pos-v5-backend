@@ -41,6 +41,15 @@ public class BrandController {
         return ResponseEntity.ok(ApiResponse.success("Active brands fetched successfully", brandService.getActiveByBranch(branchId)));
     }
 
+    // GET /api/brands/branch/{branchId}/category/{categoryId}/active
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('BRAND_VIEW')")
+    @GetMapping("/branch/{branchId}/category/{categoryId}/active")
+    public ResponseEntity<ApiResponse<List<BrandResponse>>> getActiveByBranchAndCategory(
+            @PathVariable Long branchId,
+            @PathVariable Long categoryId) {
+        return ResponseEntity.ok(ApiResponse.success("Active category brands fetched successfully", brandService.getActiveByBranchAndCategory(branchId, categoryId)));
+    }
+
     // GET /api/brands/{id}
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('BRAND_VIEW')")
     @GetMapping("/{id}")
