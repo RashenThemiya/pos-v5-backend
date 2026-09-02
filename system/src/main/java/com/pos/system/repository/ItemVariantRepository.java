@@ -12,5 +12,7 @@ public interface ItemVariantRepository extends JpaRepository<ItemVariant, Long> 
     Optional<ItemVariant> findByBranchIdAndSku(Long branchId, String sku);
     boolean existsByBranchIdAndSku(Long branchId, String sku);
     boolean existsByBranchIdAndSkuAndVariantIdNot(Long branchId, String sku, Long variantId);
+    boolean existsByBranchIdAndVariantSku(Long branchId, String variantSku);
+    boolean existsByBranchIdAndVariantSkuAndVariantIdNot(Long branchId, String variantSku, Long variantId);
     void deleteByItemId(Long itemId);
 }

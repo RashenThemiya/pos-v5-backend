@@ -33,8 +33,14 @@ public class ItemVariant {
     @Column(length = 100)
     private String sku;
 
+    @Column(name = "variant_sku", nullable = false, length = 100)
+    private String variantSku;
+
     @Column(precision = 10, scale = 2)
     private BigDecimal defaultSellingPrice;
+
+    @Column(name = "combination_signature", nullable = false, length = 512)
+    private String combinationSignature;
 
     @Column(nullable = false)
     private Boolean isActive = true;

@@ -247,7 +247,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(defaultMoney(request.getDefaultSellingPrice()));
         unit.setIsBaseUnit(false);
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
 
@@ -291,7 +291,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(defaultMoney(request.getDefaultSellingPrice()));
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : unit.getIsActive());
 
         String incomingBarcode = normalizeBarcode(request.getBarcode());
@@ -449,7 +449,7 @@ public class ItemService {
             throw new RuntimeException("Base unit multiplierToBase must be 1");
         }
 
-        if (unit.getDefaultSellingPrice() == null || unit.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
+        if (unit.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Default selling price must be >= 0");
         }
 
@@ -478,7 +478,7 @@ public class ItemService {
             throw new RuntimeException("Multiplier to base must be greater than 0");
         }
 
-        if (request.getDefaultSellingPrice() == null || request.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
+        if (request.getDefaultSellingPrice() != null && request.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Default selling price must be >= 0");
         }
     }
@@ -521,7 +521,7 @@ public class ItemService {
         unit.setUnitName(request.getBaseUnitName());
         unit.setMultiplierToBase(new BigDecimal(request.getBaseUnitMultiplierToBase()));
         unit.setBarcode(request.getBaseUnitBarcode());
-        unit.setDefaultSellingPrice(new BigDecimal(request.getBaseUnitDefaultSellingPrice()));
+        unit.setDefaultSellingPrice(parseOptionalMoney(request.getBaseUnitDefaultSellingPrice()));
         unit.setIsActive(request.getBaseUnitIsActive());
         return unit;
     }
@@ -538,7 +538,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(BigDecimal.ONE);
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(request.getDefaultSellingPrice() != null ? request.getDefaultSellingPrice() : BigDecimal.ZERO);
         unit.setIsBaseUnit(true);
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
 
@@ -566,6 +566,17 @@ public class ItemService {
         unit.setUpdatedAt(LocalDateTime.now());
 
         return itemUnitRepository.save(unit);
+    }
+
+    private BigDecimal parseOptionalMoney(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        return new BigDecimal(value.trim());
+    }
+
+    private BigDecimal defaultMoney(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 
     private void syncScaleMapping(Item item, ItemUnit baseUnit, String scaleItemCode) {
@@ -905,8 +916,12 @@ public class ItemService {
                 boolean duplicateVariantSku = request.getVariantId() == null
                         ? itemVariantRepository.existsByBranchIdAndSku(item.getBranchId(), sku)
                         : itemVariantRepository.existsByBranchIdAndSkuAndVariantIdNot(item.getBranchId(), sku, request.getVariantId());
+                duplicateVariantSku = duplicateVariantSku || (request.getVariantId() == null
+                        ? itemVariantRepository.existsByBranchIdAndVariantSku(item.getBranchId(), sku)
+                        : itemVariantRepository.existsByBranchIdAndVariantSkuAndVariantIdNot(item.getBranchId(), sku, request.getVariantId()));
                 if (currentVariantId != null && currentVariantId.equals(request.getVariantId())) {
-                    duplicateVariantSku = itemVariantRepository.existsByBranchIdAndSkuAndVariantIdNot(item.getBranchId(), sku, currentVariantId);
+                    duplicateVariantSku = itemVariantRepository.existsByBranchIdAndSkuAndVariantIdNot(item.getBranchId(), sku, currentVariantId)
+                            || itemVariantRepository.existsByBranchIdAndVariantSkuAndVariantIdNot(item.getBranchId(), sku, currentVariantId);
                 }
                 if (duplicateVariantSku) {
                     throw new RuntimeException("Variant SKU already exists in this branch: " + sku);
@@ -936,10 +951,14 @@ public class ItemService {
 
     private ItemVariant saveVariant(Item item, ItemVariant variant, ItemVariantRequest request) {
         boolean creating = variant.getVariantId() == null;
+        String normalizedSku = normalizeVariantSku(request.getSku());
+        String combinationSignature = buildVariantCombinationKey(request.getAttributes());
         variant.setItemId(item.getItemId());
         variant.setBranchId(item.getBranchId());
-        variant.setSku(normalizeVariantSku(request.getSku()));
+        variant.setSku(normalizedSku);
+        variant.setVariantSku(normalizedSku != null ? normalizedSku : buildInternalVariantSku(item, combinationSignature));
         variant.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        variant.setCombinationSignature(combinationSignature);
         variant.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
         if (creating) {
             variant.setCreatedAt(LocalDateTime.now());
@@ -951,6 +970,14 @@ public class ItemService {
         itemVariantAttributeRepository.flush();
         itemVariantAttributeRepository.saveAll(toVariantAttributes(saved.getVariantId(), request.getAttributes()));
         return saved;
+    }
+
+    private String buildInternalVariantSku(Item item, String combinationSignature) {
+        String seed = item.getBranchId() + ":" + item.getItemId() + ":" + combinationSignature;
+        return "V" + item.getItemId() + "-" + java.util.UUID.nameUUIDFromBytes(seed.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString()
+                .substring(0, 8)
+                .toUpperCase(Locale.ROOT);
     }
 
     private List<ItemVariantAttribute> toVariantAttributes(Long variantId, List<ItemVariantAttributeRequest> attributes) {
