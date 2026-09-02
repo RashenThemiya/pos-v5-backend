@@ -5,6 +5,7 @@ import com.pos.system.model.catalog.Brand;
 import com.pos.system.model.catalog.Category;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.*;
 import com.pos.system.repository.*;
@@ -34,6 +35,8 @@ public class StockServiceImpl implements StockService {
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final ItemVariantRepository itemVariantRepository;
+    private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final UnitMasterRepository unitMasterRepository;
     private final CategoryRepository categoryRepository;
     private final BrandRepository brandRepository;
@@ -49,7 +52,7 @@ public class StockServiceImpl implements StockService {
 
     @Override
     public StockResponseDto getStockByBranchAndItem(Long branchId, Long itemId) {
-        Stock stock = stockRepository.findByBranchIdAndItemId(branchId, itemId)
+        Stock stock = findStock(branchId, itemId, null)
                 .orElseThrow(() -> new RuntimeException("Stock not found"));
         return mapStock(stock);
     }
@@ -93,7 +96,7 @@ public class StockServiceImpl implements StockService {
         }
 
         for (OpeningStockItemRequestDto itemDto : dto.getItems()) {
-            validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
+            validateItemUnitAndVariant(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId(), itemDto.getVariantId());
 
             BigDecimal qty = nvlQty(itemDto.getQuantity());
             BigDecimal qtyBase = unitConversionService.toBaseQty(itemDto.getItemId(), itemDto.getUnitId(), qty);
@@ -101,11 +104,12 @@ public class StockServiceImpl implements StockService {
             ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
                     .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
 
-            Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
+            Stock stock = findStock(dto.getBranchId(), itemDto.getItemId(), itemDto.getVariantId())
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setVariantId(itemDto.getVariantId());
                         s.setUnitId(baseUnit.getUnitId());
                         return s;
                     });
@@ -118,6 +122,7 @@ public class StockServiceImpl implements StockService {
             StockBatch batch = new StockBatch();
             batch.setBranchId(dto.getBranchId());
             batch.setItemId(itemDto.getItemId());
+            batch.setVariantId(itemDto.getVariantId());
             batch.setSupplyProductId(0L);
             batch.setUnitId(itemDto.getUnitId());
             batch.setReceivedQty(qty);
@@ -139,6 +144,7 @@ public class StockServiceImpl implements StockService {
             movement.setBranchId(dto.getBranchId());
             movement.setMovementType("OPENING");
             movement.setItemId(itemDto.getItemId());
+            movement.setVariantId(itemDto.getVariantId());
             movement.setUnitId(itemDto.getUnitId());
             movement.setInternalBatchBarcode(internalBatchBarcode);
             movement.setQuantity(qtyBase);
@@ -161,7 +167,8 @@ public class StockServiceImpl implements StockService {
 
     @Override
     public StockBatchResponseDto adjustStock(StockAdjustRequest dto) {
-        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+        Long variantId = resolveBatchVariantId(dto.getBranchId(), dto.getItemId(), dto.getVariantId(), dto.getInternalBatchBarcode());
+        validateItemUnitAndVariant(dto.getBranchId(), dto.getItemId(), dto.getUnitId(), variantId);
 
         BigDecimal qty = nvlQty(dto.getQuantity());
         if (qty.compareTo(BigDecimal.ZERO) <= 0) {
@@ -180,6 +187,9 @@ public class StockServiceImpl implements StockService {
         if (!batch.getItemId().equals(dto.getItemId())) {
             throw new RuntimeException("Batch does not belong to item: " + dto.getItemId());
         }
+        if (!sameVariant(batch.getVariantId(), variantId)) {
+            throw new RuntimeException("Batch does not belong to selected variant");
+        }
 
         switch (adjustmentType) {
             case "AVAILABLE_TO_DAMAGED" -> moveAvailableToDamaged(batch, qtyBase);
@@ -193,7 +203,7 @@ public class StockServiceImpl implements StockService {
 
         StockBatch savedBatch = stockBatchRepository.save(batch);
 
-        stockRepository.findByBranchIdAndItemId(dto.getBranchId(), dto.getItemId()).ifPresent(stock -> {
+        findStock(dto.getBranchId(), dto.getItemId(), variantId).ifPresent(stock -> {
             stock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(stock);
         });
@@ -202,6 +212,7 @@ public class StockServiceImpl implements StockService {
         movement.setBranchId(dto.getBranchId());
         movement.setMovementType(adjustmentType);
         movement.setItemId(dto.getItemId());
+        movement.setVariantId(variantId);
         movement.setUnitId(dto.getUnitId());
         movement.setInternalBatchBarcode(dto.getInternalBatchBarcode());
         movement.setQuantity(qtyBase);
@@ -245,8 +256,14 @@ public class StockServiceImpl implements StockService {
                 throw new RuntimeException("Transfer quantity must be greater than zero");
             }
 
+            Long variantId = sourceBatch.getVariantId() != null ? sourceBatch.getVariantId() : itemDto.getVariantId();
+            validateItemUnitAndVariant(dto.getFromBranchId(), itemDto.getItemId(), sourceBatch.getUnitId(), variantId);
+
             if (!sourceBatch.getItemId().equals(itemDto.getItemId())) {
                 throw new RuntimeException("Batch does not belong to item: " + itemDto.getItemId());
+            }
+            if (!sameVariant(sourceBatch.getVariantId(), variantId)) {
+                throw new RuntimeException("Batch does not belong to selected variant");
             }
 
             if (nvlQty(sourceBatch.getAvailableQty()).compareTo(qty) < 0) {
@@ -257,7 +274,7 @@ public class StockServiceImpl implements StockService {
             sourceBatch.setAvailableQty(nvlQty(sourceBatch.getAvailableQty()).subtract(qty));
             stockBatchRepository.save(sourceBatch);
 
-            Stock fromStock = stockRepository.findByBranchIdAndItemId(dto.getFromBranchId(), itemDto.getItemId())
+            Stock fromStock = findStock(dto.getFromBranchId(), itemDto.getItemId(), variantId)
                     .orElseThrow(() -> new RuntimeException("Source stock not found"));
             fromStock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(fromStock);
@@ -265,11 +282,12 @@ public class StockServiceImpl implements StockService {
             ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
                     .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
 
-            Stock toStock = stockRepository.findByBranchIdAndItemId(dto.getToBranchId(), itemDto.getItemId())
+            Stock toStock = findStock(dto.getToBranchId(), itemDto.getItemId(), variantId)
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getToBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setVariantId(variantId);
                         s.setUnitId(baseUnit.getUnitId());
                         return s;
                     });
@@ -279,6 +297,7 @@ public class StockServiceImpl implements StockService {
             StockBatch destBatch = new StockBatch();
             destBatch.setBranchId(dto.getToBranchId());
             destBatch.setItemId(sourceBatch.getItemId());
+            destBatch.setVariantId(variantId);
             destBatch.setSupplyProductId(sourceBatch.getSupplyProductId());
             destBatch.setUnitId(sourceBatch.getUnitId());
             destBatch.setReceivedQty(qty);
@@ -299,6 +318,7 @@ public class StockServiceImpl implements StockService {
             StockTransferItem transferItem = new StockTransferItem();
             transferItem.setTransferId(savedTransfer.getTransferId());
             transferItem.setItemId(itemDto.getItemId());
+            transferItem.setVariantId(variantId);
             transferItem.setInternalBatchBarcode(sourceBatch.getInternalBatchBarcode());
             transferItem.setQuantity(qty);
             stockTransferItemRepository.save(transferItem);
@@ -307,6 +327,7 @@ public class StockServiceImpl implements StockService {
             outMovement.setBranchId(dto.getFromBranchId());
             outMovement.setMovementType("TRANSFER_OUT");
             outMovement.setItemId(itemDto.getItemId());
+            outMovement.setVariantId(variantId);
             outMovement.setUnitId(sourceBatch.getUnitId());
             outMovement.setInternalBatchBarcode(sourceBatch.getInternalBatchBarcode());
             outMovement.setQuantity(qty);
@@ -323,6 +344,7 @@ public class StockServiceImpl implements StockService {
             inMovement.setBranchId(dto.getToBranchId());
             inMovement.setMovementType("TRANSFER_IN");
             inMovement.setItemId(itemDto.getItemId());
+            inMovement.setVariantId(variantId);
             inMovement.setUnitId(sourceBatch.getUnitId());
             inMovement.setInternalBatchBarcode(destBatch.getInternalBatchBarcode());
             inMovement.setQuantity(qty);
@@ -382,6 +404,9 @@ public class StockServiceImpl implements StockService {
                         .transferItemId(i.getTransferItemId())
                         .transferId(i.getTransferId())
                         .itemId(i.getItemId())
+                        .variantId(i.getVariantId())
+                        .variantSku(resolveVariantSku(i.getVariantId()))
+                        .variantLabel(resolveVariantLabel(i.getVariantId()))
                         .internalBatchBarcode(i.getInternalBatchBarcode())
                         .quantity(i.getQuantity())
                         .build())
@@ -415,25 +440,29 @@ public class StockServiceImpl implements StockService {
         StockCount savedCount = stockCountRepository.save(count);
 
         for (StockCountItemRequestDto itemDto : dto.getItems()) {
+            validateItemUnitAndVariant(dto.getBranchId(), itemDto.getItemId(), null, itemDto.getVariantId());
+
             ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
                     .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
 
-            Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
+            Stock stock = findStock(dto.getBranchId(), itemDto.getItemId(), itemDto.getVariantId())
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getBranchId());
                         s.setItemId(itemDto.getItemId());
+                        s.setVariantId(itemDto.getVariantId());
                         s.setUnitId(baseUnit.getUnitId());
                         return s;
                     });
 
-            BigDecimal systemQty = getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.AVAILABLE);
+            BigDecimal systemQty = getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), itemDto.getVariantId(), StockQtyType.AVAILABLE);
             BigDecimal countedQty = nvlQty(itemDto.getCountedQty());
             BigDecimal diff = countedQty.subtract(systemQty);
 
             StockCountItem countItem = new StockCountItem();
             countItem.setStockCountId(savedCount.getStockCountId());
             countItem.setItemId(itemDto.getItemId());
+            countItem.setVariantId(itemDto.getVariantId());
             countItem.setSystemQty(systemQty);
             countItem.setCountedQty(countedQty);
             countItem.setDifferenceQty(diff);
@@ -455,6 +484,9 @@ public class StockServiceImpl implements StockService {
                         .stockCountItemId(i.getStockCountItemId())
                         .stockCountId(i.getStockCountId())
                         .itemId(i.getItemId())
+                        .variantId(i.getVariantId())
+                        .variantSku(resolveVariantSku(i.getVariantId()))
+                        .variantLabel(resolveVariantLabel(i.getVariantId()))
                         .systemQty(i.getSystemQty())
                         .countedQty(i.getCountedQty())
                         .differenceQty(i.getDifferenceQty())
@@ -482,7 +514,7 @@ public class StockServiceImpl implements StockService {
                 .toList();
     }
 
-    private void validateItemAndUnit(Long branchId, Long itemId, Long unitId) {
+    private void validateItemUnitAndVariant(Long branchId, Long itemId, Long unitId, Long variantId) {
         Item item = itemRepository.findByItemIdAndIsActiveTrue(itemId)
                 .orElseThrow(() -> new RuntimeException("Item not found or inactive: " + itemId));
 
@@ -490,11 +522,24 @@ public class StockServiceImpl implements StockService {
             throw new RuntimeException("Item does not belong to branch: " + itemId);
         }
 
-        ItemUnit itemUnit = itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
-                .orElseThrow(() -> new RuntimeException("Unit not found or inactive for itemId=" + itemId + ", unitId=" + unitId));
+        if (unitId != null) {
+            ItemUnit itemUnit = itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
+                    .orElseThrow(() -> new RuntimeException("Unit not found or inactive for itemId=" + itemId + ", unitId=" + unitId));
 
-        if (!itemUnit.getBranchId().equals(branchId)) {
-            throw new RuntimeException("Unit does not belong to branch for unitId=" + unitId);
+            if (!itemUnit.getBranchId().equals(branchId)) {
+                throw new RuntimeException("Unit does not belong to branch for unitId=" + unitId);
+            }
+        }
+
+        if (variantId != null) {
+            ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                    .orElseThrow(() -> new RuntimeException("Variant not found for item: " + variantId));
+            if (!variant.getBranchId().equals(branchId)) {
+                throw new RuntimeException("Variant does not belong to branch: " + variantId);
+            }
+            if (!Boolean.TRUE.equals(variant.getIsActive())) {
+                throw new RuntimeException("Variant is inactive: " + variantId);
+            }
         }
     }
 
@@ -535,6 +580,9 @@ public class StockServiceImpl implements StockService {
                 .stockId(stock.getStockId())
                 .branchId(stock.getBranchId())
                 .itemId(stock.getItemId())
+                .variantId(stock.getVariantId())
+                .variantSku(resolveVariantSku(stock.getVariantId()))
+                .variantLabel(resolveVariantLabel(stock.getVariantId()))
                 .unitStocks(unitStocks)
                 .lastUpdated(stock.getLastUpdated());
 
@@ -577,10 +625,7 @@ public class StockServiceImpl implements StockService {
     }
 
     private StockResponseDto.UnitStockDto mapUnitStock(Stock stock, ItemUnit unit) {
-        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(
-                stock.getBranchId(),
-                stock.getItemId()
-        ).stream()
+        List<StockBatch> batches = findBatches(stock.getBranchId(), stock.getItemId(), stock.getVariantId()).stream()
                 .filter(batch -> batch.getUnitId().equals(unit.getUnitId()))
                 .toList();
         BigDecimal availableBaseQty = batches.stream()
@@ -680,6 +725,9 @@ public class StockServiceImpl implements StockService {
                 .stockBatchId(batch.getStockBatchId())
                 .branchId(batch.getBranchId())
                 .itemId(batch.getItemId())
+                .variantId(batch.getVariantId())
+                .variantSku(resolveVariantSku(batch.getVariantId()))
+                .variantLabel(resolveVariantLabel(batch.getVariantId()))
                 .itemSku(item != null ? item.getSku() : null)
                 .itemName(item != null ? item.getName() : null)
                 .supplyProductId(batch.getSupplyProductId())
@@ -725,6 +773,9 @@ public class StockServiceImpl implements StockService {
                 .branchId(movement.getBranchId())
                 .movementType(movement.getMovementType())
                 .itemId(movement.getItemId())
+                .variantId(movement.getVariantId())
+                .variantSku(resolveVariantSku(movement.getVariantId()))
+                .variantLabel(resolveVariantLabel(movement.getVariantId()))
                 .unitId(movement.getUnitId())
                 .internalBatchBarcode(movement.getInternalBatchBarcode())
                 .quantity(movement.getQuantity())
@@ -742,8 +793,8 @@ public class StockServiceImpl implements StockService {
         return value != null ? value : BigDecimal.ZERO;
     }
 
-    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
-        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, Long variantId, StockQtyType type) {
+        return findBatches(branchId, itemId, variantId)
                 .stream()
                 .map(batch -> switch (type) {
                     case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
@@ -751,6 +802,50 @@ public class StockServiceImpl implements StockService {
                     case EXPIRED -> nvlQty(batch.getExpiredQty());
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private java.util.Optional<Stock> findStock(Long branchId, Long itemId, Long variantId) {
+        return stockRepository.findByBranchIdAndItemIdAndVariantId(branchId, itemId, variantId);
+    }
+
+    private List<StockBatch> findBatches(Long branchId, Long itemId, Long variantId) {
+        return stockBatchRepository.findByBranchIdAndItemIdAndVariantIdOrderByCreatedAtDesc(branchId, itemId, variantId);
+    }
+
+    private Long resolveBatchVariantId(Long branchId, Long itemId, Long requestedVariantId, String batchBarcode) {
+        if (batchBarcode == null || batchBarcode.isBlank()) {
+            return requestedVariantId;
+        }
+
+        return stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, batchBarcode)
+                .filter(batch -> itemId.equals(batch.getItemId()))
+                .map(batch -> batch.getVariantId() != null ? batch.getVariantId() : requestedVariantId)
+                .orElse(requestedVariantId);
+    }
+
+    private boolean sameVariant(Long left, Long right) {
+        return java.util.Objects.equals(left, right);
+    }
+
+    private String resolveVariantSku(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        return itemVariantRepository.findById(variantId)
+                .map(ItemVariant::getSku)
+                .orElse(null);
+    }
+
+    private String resolveVariantLabel(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        String label = itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId)
+                .stream()
+                .map(attribute -> attribute.getAttributeName() + ": " + attribute.getAttributeValue())
+                .reduce((left, right) -> left + " / " + right)
+                .orElse(null);
+        return label != null && !label.isBlank() ? label : resolveVariantSku(variantId);
     }
 
     private enum StockQtyType {

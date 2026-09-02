@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.supplier.PurchaseOrderItemRequestDto;
+import com.pos.system.dto.supplier.PurchaseOrderItemResponseDto;
 import com.pos.system.dto.supplier.PurchaseOrderRequestDto;
 import com.pos.system.dto.supplier.PurchaseOrderResponseDto;
 import com.pos.system.dto.supplier.SupplierPaymentRequestDto;
@@ -11,6 +12,7 @@ import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.sale.CustomerOrder;
 import com.pos.system.model.sale.Payment;
 import com.pos.system.model.supplier.PurchaseOrder;
@@ -26,6 +28,8 @@ import com.pos.system.repository.CashSessionTransactionRepository;
 import com.pos.system.repository.CustomerOrderRepository;
 import com.pos.system.repository.ItemRepository;
 import com.pos.system.repository.ItemUnitRepository;
+import com.pos.system.repository.ItemVariantAttributeRepository;
+import com.pos.system.repository.ItemVariantRepository;
 import com.pos.system.repository.PaymentRepository;
 import com.pos.system.repository.PurchaseOrderItemRepository;
 import com.pos.system.repository.PurchaseOrderRepository;
@@ -72,6 +76,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
     private static final Long USER_ID = 7L;
     private static final Long ITEM_A_ID = 10L;
     private static final Long UNIT_A_ID = 20L;
+    private static final Long VARIANT_A_ID = 101L;
+    private static final Long VARIANT_B_ID = 102L;
     private static final Long ITEM_B_ID = 11L;
     private static final Long UNIT_B_ID = 21L;
 
@@ -88,6 +94,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private StockMovementRepository stockMovementRepository;
     @Mock private ItemRepository itemRepository;
     @Mock private ItemUnitRepository itemUnitRepository;
+    @Mock private ItemVariantRepository itemVariantRepository;
+    @Mock private ItemVariantAttributeRepository itemVariantAttributeRepository;
     @Mock private UnitMasterRepository unitMasterRepository;
     @Mock private UnitConversionService unitConversionService;
     @Mock private CashSessionRepository cashSessionRepository;
@@ -124,6 +132,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 stockMovementRepository,
                 itemRepository,
                 itemUnitRepository,
+                itemVariantRepository,
+                itemVariantAttributeRepository,
                 unitMasterRepository,
                 unitConversionService,
                 cashSessionRepository,
@@ -143,6 +153,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
         supplier.setBalance(BigDecimal.ZERO);
 
         stubCatalogItem(ITEM_A_ID, UNIT_A_ID, "Coca-Cola");
+        stubCatalogVariant(ITEM_A_ID, VARIANT_A_ID, "SKU-10-RED");
+        stubCatalogVariant(ITEM_A_ID, VARIANT_B_ID, "SKU-10-BLUE");
         stubCatalogItem(ITEM_B_ID, UNIT_B_ID, "Sprite");
 
         when(supplierRepository.findById(SUPPLIER_ID)).thenReturn(Optional.of(supplier));
@@ -154,6 +166,14 @@ class SupplierManagementServiceImplProcurementFlowTest {
                         invocation.getArgument(1),
                         invocation.getArgument(2),
                         invocation.getArgument(3)
+                )));
+        when(supplierItemRepository.findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(anyLong(), anyLong(), anyLong(), any(), anyLong()))
+                .thenAnswer(invocation -> Optional.of(activeSupplierItem(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4)
                 )));
         when(supplierItemRepository.save(any(SupplierItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -198,6 +218,18 @@ class SupplierManagementServiceImplProcurementFlowTest {
             return purchaseOrderItems.stream()
                     .filter(poLine -> poLine.getPoId().equals(poId)
                             && poLine.getItemId().equals(itemId)
+                            && poLine.getUnitId().equals(unitId))
+                    .findFirst();
+        });
+        when(purchaseOrderItemRepository.findByPoIdAndItemIdAndVariantIdAndUnitId(anyLong(), anyLong(), any(), anyLong())).thenAnswer(invocation -> {
+            Long poId = invocation.getArgument(0);
+            Long itemId = invocation.getArgument(1);
+            Long variantId = invocation.getArgument(2);
+            Long unitId = invocation.getArgument(3);
+            return purchaseOrderItems.stream()
+                    .filter(poLine -> poLine.getPoId().equals(poId)
+                            && poLine.getItemId().equals(itemId)
+                            && java.util.Objects.equals(poLine.getVariantId(), variantId)
                             && poLine.getUnitId().equals(unitId))
                     .findFirst();
         });
@@ -274,6 +306,57 @@ class SupplierManagementServiceImplProcurementFlowTest {
         assertThat(po.getReceivingStatus()).isEqualTo("NOT_RECEIVED");
         assertThat(po.getPaymentStatus()).isEqualTo("UNPAID");
         assertThat(po.getStatus()).isEqualTo("PENDING");
+    }
+
+    @Test
+    void createPurchaseOrderAllowsSameItemAndUnitWhenVariantsDiffer() {
+        PurchaseOrderRequestDto request = basePoRequest("PO-VARIANTS");
+        request.setItems(List.of(
+                poLine(ITEM_A_ID, VARIANT_A_ID, UNIT_A_ID, "40", "140"),
+                poLine(ITEM_A_ID, VARIANT_B_ID, UNIT_A_ID, "30", "150")
+        ));
+
+        PurchaseOrderResponseDto po = service.createPurchaseOrder(request);
+
+        assertThat(po.getItems()).hasSize(2);
+        assertThat(po.getTotalAmount()).isEqualByComparingTo("10100");
+        assertThat(po.getItems())
+                .extracting(PurchaseOrderItemResponseDto::getVariantId)
+                .containsExactlyInAnyOrder(VARIANT_A_ID, VARIANT_B_ID);
+    }
+
+    @Test
+    void receivingPurchaseOrderTracksSameItemAndUnitByVariant() {
+        PurchaseOrderRequestDto request = basePoRequest("PO-VARIANT-GRN");
+        request.setItems(List.of(
+                poLine(ITEM_A_ID, VARIANT_A_ID, UNIT_A_ID, "40", "140"),
+                poLine(ITEM_A_ID, VARIANT_B_ID, UNIT_A_ID, "30", "150")
+        ));
+        PurchaseOrderResponseDto po = service.createPurchaseOrder(request);
+
+        SupplyRequestDto receipt = supplyRequest(po.getPoId(), "0");
+        receipt.setProducts(List.of(
+                supplyLine(ITEM_A_ID, VARIANT_A_ID, UNIT_A_ID, "40", "140"),
+                supplyLine(ITEM_A_ID, VARIANT_B_ID, UNIT_A_ID, "10", "150")
+        ));
+        service.createSupply(receipt);
+
+        PurchaseOrderResponseDto current = service.getPurchaseOrderById(po.getPoId());
+        assertThat(current.getReceivingStatus()).isEqualTo("PARTIALLY_RECEIVED");
+        assertThat(current.getItems())
+                .filteredOn(item -> VARIANT_A_ID.equals(item.getVariantId()))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getReceivedQty()).isEqualByComparingTo("40");
+                    assertThat(item.getRemainingQty()).isEqualByComparingTo("0");
+                });
+        assertThat(current.getItems())
+                .filteredOn(item -> VARIANT_B_ID.equals(item.getVariantId()))
+                .singleElement()
+                .satisfies(item -> {
+                    assertThat(item.getReceivedQty()).isEqualByComparingTo("10");
+                    assertThat(item.getRemainingQty()).isEqualByComparingTo("20");
+                });
     }
 
     @Test
@@ -555,11 +638,29 @@ class SupplierManagementServiceImplProcurementFlowTest {
         when(itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemId)).thenReturn(Optional.of(unit));
     }
 
+    private void stubCatalogVariant(Long itemId, Long variantId, String sku) {
+        ItemVariant variant = new ItemVariant();
+        variant.setVariantId(variantId);
+        variant.setItemId(itemId);
+        variant.setBranchId(BRANCH_ID);
+        variant.setSku(sku);
+        variant.setIsActive(true);
+
+        when(itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)).thenReturn(Optional.of(variant));
+        when(itemVariantRepository.findById(variantId)).thenReturn(Optional.of(variant));
+        when(itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId)).thenReturn(List.of());
+    }
+
     private SupplierItem activeSupplierItem(Long branchId, Long supplierId, Long itemId, Long unitId) {
+        return activeSupplierItem(branchId, supplierId, itemId, null, unitId);
+    }
+
+    private SupplierItem activeSupplierItem(Long branchId, Long supplierId, Long itemId, Long variantId, Long unitId) {
         SupplierItem supplierItem = new SupplierItem();
         supplierItem.setBranchId(branchId);
         supplierItem.setSupplierId(supplierId);
         supplierItem.setItemId(itemId);
+        supplierItem.setVariantId(variantId);
         supplierItem.setUnitId(unitId);
         supplierItem.setIsActive(true);
         return supplierItem;
@@ -599,6 +700,12 @@ class SupplierManagementServiceImplProcurementFlowTest {
         return item;
     }
 
+    private PurchaseOrderItemRequestDto poLine(Long itemId, Long variantId, Long unitId, String qty, String unitCost) {
+        PurchaseOrderItemRequestDto item = poLine(itemId, unitId, qty, unitCost);
+        item.setVariantId(variantId);
+        return item;
+    }
+
     private void receivePo(Long poId, String qty, String paidAmount) {
         service.createSupply(supplyRequest(poId, qty, paidAmount));
     }
@@ -629,6 +736,12 @@ class SupplierManagementServiceImplProcurementFlowTest {
         product.setSellingPrice(BigDecimal.ZERO);
         product.setQuantityReceived(new BigDecimal(qty));
         product.setLineTotal(new BigDecimal(unitCost).multiply(new BigDecimal(qty)));
+        return product;
+    }
+
+    private SupplyProductRequestDto supplyLine(Long itemId, Long variantId, Long unitId, String qty, String unitCost) {
+        SupplyProductRequestDto product = supplyLine(itemId, unitId, qty, unitCost);
+        product.setVariantId(variantId);
         return product;
     }
 

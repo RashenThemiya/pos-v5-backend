@@ -12,6 +12,9 @@ public class PurchaseReturnItemResponseDto {
     private Long purchaseReturnItemId;
     private Long purchaseReturnId;
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private Long unitId;
     private Long masterUnitId;
     private String unitName;

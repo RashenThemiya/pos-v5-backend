@@ -13,6 +13,9 @@ public class StockResponseDto {
     private Long stockId;
     private Long branchId;
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private String itemSku;
     private String itemName;
     private String itemImage;

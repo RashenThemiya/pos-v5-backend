@@ -24,6 +24,8 @@ public class OrderProduct {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     private Long unitId;
     private String batchBarcode;
 

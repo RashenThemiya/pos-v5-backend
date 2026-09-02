@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface SalesReturnItemRepository extends JpaRepository<SalesReturnItem, Long> {
     List<SalesReturnItem> findByReturnId(Long returnId);
+    boolean existsByVariantId(Long variantId);
 }

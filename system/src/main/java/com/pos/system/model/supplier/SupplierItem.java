@@ -13,7 +13,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Entity
 @Table(name = "supplier_items", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"branch_id", "supplier_id", "item_id", "unit_id"})
+        @UniqueConstraint(columnNames = {"branch_id", "supplier_id", "item_id", "variant_id", "unit_id"})
 })
 public class SupplierItem {
 
@@ -29,6 +29,8 @@ public class SupplierItem {
 
     @Column(nullable = false)
     private Long itemId;
+
+    private Long variantId;
 
     @Column(nullable = false)
     private Long unitId;

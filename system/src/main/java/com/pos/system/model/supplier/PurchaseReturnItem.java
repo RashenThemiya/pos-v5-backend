@@ -24,6 +24,8 @@ public class PurchaseReturnItem {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     @Column(nullable = false)
     private Long unitId;
 

@@ -11,6 +11,8 @@ public class StockAdjustRequest {
     @NotNull(message = "Item ID is required")
     private Long itemId;
 
+    private Long variantId;
+
     @NotNull(message = "Branch ID is required")
     private Long branchId;
 

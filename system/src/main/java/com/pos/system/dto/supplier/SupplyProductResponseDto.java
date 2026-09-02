@@ -13,6 +13,9 @@ public class SupplyProductResponseDto {
     private Long supplyProductId;
     private Long supplyId;
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private Long unitId;
     private Long masterUnitId;
     private String unitName;

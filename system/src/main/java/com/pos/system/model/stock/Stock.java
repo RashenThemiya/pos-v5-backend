@@ -12,7 +12,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Entity
 @Table(name = "stock", uniqueConstraints = {
-        @UniqueConstraint(columnNames = {"branch_id", "item_id"})
+        @UniqueConstraint(columnNames = {"branch_id", "item_id", "variant_id"})
 })
 public class Stock {
 
@@ -25,6 +25,8 @@ public class Stock {
 
     @Column(nullable = false)
     private Long itemId;
+
+    private Long variantId;
 
     @Column(nullable = false)
     private Long unitId;

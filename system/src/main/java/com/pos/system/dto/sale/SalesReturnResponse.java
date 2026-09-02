@@ -34,6 +34,9 @@ public class SalesReturnResponse {
     public static class ReturnItemResponse {
         private Long returnItemId;
         private Long itemId;
+        private Long variantId;
+        private String variantSku;
+        private String variantLabel;
         private String itemName;
         private String internalBatchBarcode;
         private BigDecimal quantity;

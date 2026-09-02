@@ -8,6 +8,7 @@ import java.time.LocalDate;
 @Data
 public class OpeningStockItemRequestDto {
     private Long itemId;
+    private Long variantId;
     private Long unitId;
     private BigDecimal quantity;
     private BigDecimal costPrice;

@@ -8,4 +8,5 @@ import java.util.List;
 public interface PurchaseReturnItemRepository extends JpaRepository<PurchaseReturnItem, Long> {
 
     List<PurchaseReturnItem> findByPurchaseReturnId(Long purchaseReturnId);
+    boolean existsByVariantId(Long variantId);
 }

@@ -1,13 +1,22 @@
 package com.pos.system.service;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pos.system.dto.item.ItemSearchRequest;
 import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
 import com.pos.system.dto.item.ItemUnitResponse;
+import com.pos.system.dto.item.ItemVariantAttributeRequest;
+import com.pos.system.dto.item.ItemVariantAttributeResponse;
+import com.pos.system.dto.item.ItemVariantRequest;
+import com.pos.system.dto.item.ItemVariantResponse;
 import com.pos.system.model.catalog.Brand;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
+import com.pos.system.model.catalog.ItemVariantAttribute;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.repository.*;
@@ -21,8 +30,12 @@ import org.springframework.util.StringUtils;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
@@ -33,8 +46,21 @@ public class ItemService {
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final ItemVariantRepository itemVariantRepository;
+    private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final UnitMasterRepository unitMasterRepository;
     private final ScaleItemMappingRepository scaleItemMappingRepository;
+    private final StockRepository stockRepository;
+    private final StockBatchRepository stockBatchRepository;
+    private final StockMovementRepository stockMovementRepository;
+    private final StockTransferItemRepository stockTransferItemRepository;
+    private final StockCountItemRepository stockCountItemRepository;
+    private final OrderProductRepository orderProductRepository;
+    private final SalesReturnItemRepository salesReturnItemRepository;
+    private final SupplierItemRepository supplierItemRepository;
+    private final PurchaseOrderItemRepository purchaseOrderItemRepository;
+    private final SupplyProductRepository supplyProductRepository;
+    private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
     private final BranchRepository branchRepository;
     private final CategoryRepository categoryRepository;
@@ -42,6 +68,7 @@ public class ItemService {
     private final BrandCategoryRepository brandCategoryRepository;
 
     private final FileStorageService fileStorageService;
+    private final ObjectMapper objectMapper;
 
     @Transactional
     public ItemResponse create(ItemRequest request) {
@@ -62,6 +89,10 @@ public class ItemService {
 
         ItemUnit baseUnit = createOrUpdateBaseUnit(item, buildBaseUnitRequest(request), request.getAutoGenerateBarcode());
         syncScaleMapping(item, baseUnit, request.getScaleItemCode());
+        List<ItemVariantRequest> variantRequests = resolveVariantRequests(request);
+        if (variantRequests != null) {
+            syncVariants(item, variantRequests);
+        }
 
         return toResponse(item);
     }
@@ -163,6 +194,10 @@ public class ItemService {
 
         ItemUnit baseUnit = createOrUpdateBaseUnit(item, buildBaseUnitRequest(request), request.getAutoGenerateBarcode());
         syncScaleMapping(item, baseUnit, request.getScaleItemCode());
+        List<ItemVariantRequest> variantRequests = resolveVariantRequests(request);
+        if (variantRequests != null) {
+            syncVariants(item, variantRequests);
+        }
 
         return toResponse(item);
     }
@@ -178,6 +213,8 @@ public class ItemService {
     @Transactional
     public void delete(Long id) {
         Item item = findById(id);
+
+        deleteVariantsByItem(item.getItemId());
 
         List<ItemUnit> units = itemUnitRepository.findByItemId(item.getItemId());
         itemUnitRepository.deleteAll(units);
@@ -210,7 +247,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(defaultMoney(request.getDefaultSellingPrice()));
         unit.setIsBaseUnit(false);
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
 
@@ -254,7 +291,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(request.getMultiplierToBase());
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(defaultMoney(request.getDefaultSellingPrice()));
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : unit.getIsActive());
 
         String incomingBarcode = normalizeBarcode(request.getBarcode());
@@ -295,6 +332,55 @@ public class ItemService {
         }
 
         itemUnitRepository.delete(unit);
+    }
+
+    public List<ItemVariantResponse> getVariantsByItem(Long itemId) {
+        findById(itemId);
+        return itemVariantRepository.findByItemIdOrderByVariantIdAsc(itemId)
+                .stream()
+                .map(this::toVariantResponse)
+                .collect(Collectors.toList());
+    }
+
+    @Transactional
+    public ItemVariantResponse addVariant(Long itemId, ItemVariantRequest request) {
+        Item item = findById(itemId);
+        request.setVariantId(null);
+        validateVariantBatch(item, List.of(request), null);
+        return toVariantResponse(saveVariant(item, new ItemVariant(), request));
+    }
+
+    @Transactional
+    public ItemVariantResponse updateVariant(Long itemId, Long variantId, ItemVariantRequest request) {
+        Item item = findById(itemId);
+        ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .orElseThrow(() -> new RuntimeException("Item variant not found with id: " + variantId));
+
+        request.setVariantId(variantId);
+        validateVariantBatch(item, List.of(request), variantId);
+        return toVariantResponse(saveVariant(item, variant, request));
+    }
+
+    @Transactional
+    public void deleteVariant(Long itemId, Long variantId) {
+        findById(itemId);
+        ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .orElseThrow(() -> new RuntimeException("Item variant not found with id: " + variantId));
+
+        validateVariantCanBeDeleted(variant);
+        itemVariantAttributeRepository.deleteByVariantId(variant.getVariantId());
+        itemVariantRepository.delete(variant);
+    }
+
+    @Transactional
+    public ItemVariantResponse toggleVariantActive(Long itemId, Long variantId) {
+        findById(itemId);
+        ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .orElseThrow(() -> new RuntimeException("Item variant not found with id: " + variantId));
+
+        variant.setIsActive(!variant.getIsActive());
+        variant.setUpdatedAt(LocalDateTime.now());
+        return toVariantResponse(itemVariantRepository.save(variant));
     }
 
     private void validateBranch(Long branchId) {
@@ -363,7 +449,7 @@ public class ItemService {
             throw new RuntimeException("Base unit multiplierToBase must be 1");
         }
 
-        if (unit.getDefaultSellingPrice() == null || unit.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
+        if (unit.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Default selling price must be >= 0");
         }
 
@@ -371,6 +457,11 @@ public class ItemService {
             if (request.getScaleItemCode() == null || request.getScaleItemCode().trim().isEmpty()) {
                 throw new RuntimeException("Scale item code is required for weighed item");
             }
+        }
+
+        List<ItemVariantRequest> variantRequests = resolveVariantRequests(request);
+        if (Boolean.TRUE.equals(request.getIsWeighed()) && variantRequests != null && !variantRequests.isEmpty()) {
+            throw new RuntimeException("Variants are not supported for weighed items");
         }
     }
 
@@ -387,7 +478,7 @@ public class ItemService {
             throw new RuntimeException("Multiplier to base must be greater than 0");
         }
 
-        if (request.getDefaultSellingPrice() == null || request.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
+        if (request.getDefaultSellingPrice() != null && request.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
             throw new RuntimeException("Default selling price must be >= 0");
         }
     }
@@ -430,7 +521,7 @@ public class ItemService {
         unit.setUnitName(request.getBaseUnitName());
         unit.setMultiplierToBase(new BigDecimal(request.getBaseUnitMultiplierToBase()));
         unit.setBarcode(request.getBaseUnitBarcode());
-        unit.setDefaultSellingPrice(new BigDecimal(request.getBaseUnitDefaultSellingPrice()));
+        unit.setDefaultSellingPrice(parseOptionalMoney(request.getBaseUnitDefaultSellingPrice()));
         unit.setIsActive(request.getBaseUnitIsActive());
         return unit;
     }
@@ -447,7 +538,7 @@ public class ItemService {
         unit.setMasterUnitId(masterUnit.getUnitId());
         unit.setUnitName(masterUnit.getName());
         unit.setMultiplierToBase(BigDecimal.ONE);
-        unit.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        unit.setDefaultSellingPrice(request.getDefaultSellingPrice() != null ? request.getDefaultSellingPrice() : BigDecimal.ZERO);
         unit.setIsBaseUnit(true);
         unit.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
 
@@ -475,6 +566,17 @@ public class ItemService {
         unit.setUpdatedAt(LocalDateTime.now());
 
         return itemUnitRepository.save(unit);
+    }
+
+    private BigDecimal parseOptionalMoney(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        return new BigDecimal(value.trim());
+    }
+
+    private BigDecimal defaultMoney(BigDecimal value) {
+        return value != null ? value : BigDecimal.ZERO;
     }
 
     private void syncScaleMapping(Item item, ItemUnit baseUnit, String scaleItemCode) {
@@ -565,6 +667,7 @@ public class ItemService {
                 .collect(Collectors.toList());
 
         response.setUnits(units);
+        response.setVariants(getVariantsByItem(item.getItemId()));
         return response;
     }
 
@@ -704,5 +807,305 @@ public class ItemService {
         }
 
         return itemUnit.getUnitName();
+    }
+
+    private List<ItemVariantRequest> resolveVariantRequests(ItemRequest request) {
+        if (request.getVariants() != null) {
+            return request.getVariants();
+        }
+
+        if (!StringUtils.hasText(request.getVariantsJson())) {
+            return null;
+        }
+
+        try {
+            return objectMapper.readValue(request.getVariantsJson(), new TypeReference<List<ItemVariantRequest>>() {});
+        } catch (JsonProcessingException ex) {
+            throw new RuntimeException("Invalid variants payload");
+        }
+    }
+
+    private void syncVariants(Item item, List<ItemVariantRequest> requests) {
+        validateVariantBatch(item, requests, null);
+
+        List<ItemVariant> existingVariants = itemVariantRepository.findByItemIdOrderByVariantIdAsc(item.getItemId());
+        Set<Long> requestedIds = requests.stream()
+                .map(ItemVariantRequest::getVariantId)
+                .filter(id -> id != null)
+                .collect(Collectors.toSet());
+
+        List<Long> variantIdsToDelete = existingVariants.stream()
+                .map(ItemVariant::getVariantId)
+                .filter(id -> !requestedIds.contains(id))
+                .collect(Collectors.toList());
+
+        for (ItemVariant existingVariant : existingVariants) {
+            if (variantIdsToDelete.contains(existingVariant.getVariantId())) {
+                validateVariantCanBeDeleted(existingVariant);
+            }
+        }
+
+        if (!variantIdsToDelete.isEmpty()) {
+            itemVariantAttributeRepository.deleteByVariantIdIn(variantIdsToDelete);
+            itemVariantRepository.deleteAllById(variantIdsToDelete);
+        }
+
+        Map<Long, ItemVariant> existingById = existingVariants.stream()
+                .collect(Collectors.toMap(ItemVariant::getVariantId, variant -> variant));
+
+        for (ItemVariantRequest request : requests) {
+            ItemVariant variant;
+            if (request.getVariantId() != null) {
+                variant = existingById.get(request.getVariantId());
+                if (variant == null) {
+                    throw new RuntimeException("Item variant not found with id: " + request.getVariantId());
+                }
+            } else {
+                variant = new ItemVariant();
+            }
+            saveVariant(item, variant, request);
+        }
+    }
+
+    private void validateVariantBatch(Item item, List<ItemVariantRequest> requests, Long currentVariantId) {
+        if (requests == null || requests.isEmpty()) {
+            return;
+        }
+
+        if (Boolean.TRUE.equals(item.getIsWeighed())) {
+            throw new RuntimeException("Variants are not supported for weighed items");
+        }
+
+        if (requests.size() > 500) {
+            throw new RuntimeException("Too many variants in one request");
+        }
+
+        Set<String> combinations = new HashSet<>();
+        Set<Long> requestIds = new HashSet<>();
+        Set<String> requestSkus = new HashSet<>();
+
+        for (ItemVariantRequest request : requests) {
+            if (request == null) {
+                throw new RuntimeException("Variant request is required");
+            }
+
+            if (request.getVariantId() != null && !requestIds.add(request.getVariantId())) {
+                throw new RuntimeException("Duplicate variant id in request: " + request.getVariantId());
+            }
+
+            if (request.getDefaultSellingPrice() != null && request.getDefaultSellingPrice().compareTo(BigDecimal.ZERO) < 0) {
+                throw new RuntimeException("Variant selling price must be >= 0");
+            }
+
+            String sku = normalizeVariantSku(request.getSku());
+            if (sku != null) {
+                String normalizedSku = sku.toLowerCase(Locale.ROOT);
+                if (!requestSkus.add(normalizedSku)) {
+                    throw new RuntimeException("Duplicate variant SKU in request: " + sku);
+                }
+
+                if (sku.equalsIgnoreCase(item.getSku())) {
+                    throw new RuntimeException("Variant SKU cannot duplicate the item SKU: " + sku);
+                }
+
+                boolean duplicateItemSku = itemRepository.existsByBranchIdAndSku(item.getBranchId(), sku);
+                if (duplicateItemSku) {
+                    throw new RuntimeException("Variant SKU already exists as an item SKU in this branch: " + sku);
+                }
+
+                boolean duplicateVariantSku = request.getVariantId() == null
+                        ? itemVariantRepository.existsByBranchIdAndSku(item.getBranchId(), sku)
+                        : itemVariantRepository.existsByBranchIdAndSkuAndVariantIdNot(item.getBranchId(), sku, request.getVariantId());
+                duplicateVariantSku = duplicateVariantSku || (request.getVariantId() == null
+                        ? itemVariantRepository.existsByBranchIdAndVariantSku(item.getBranchId(), sku)
+                        : itemVariantRepository.existsByBranchIdAndVariantSkuAndVariantIdNot(item.getBranchId(), sku, request.getVariantId()));
+                if (currentVariantId != null && currentVariantId.equals(request.getVariantId())) {
+                    duplicateVariantSku = itemVariantRepository.existsByBranchIdAndSkuAndVariantIdNot(item.getBranchId(), sku, currentVariantId)
+                            || itemVariantRepository.existsByBranchIdAndVariantSkuAndVariantIdNot(item.getBranchId(), sku, currentVariantId);
+                }
+                if (duplicateVariantSku) {
+                    throw new RuntimeException("Variant SKU already exists in this branch: " + sku);
+                }
+            }
+
+            String combination = buildVariantCombinationKey(request.getAttributes());
+            if (!combinations.add(combination)) {
+                throw new RuntimeException("Duplicate variant attribute combination: " + describeAttributes(request.getAttributes()));
+            }
+        }
+
+        if (requests.size() == 1 || currentVariantId != null) {
+            Set<String> existingCombinations = itemVariantRepository.findByItemIdOrderByVariantIdAsc(item.getItemId())
+                    .stream()
+                    .filter(variant -> currentVariantId == null || !currentVariantId.equals(variant.getVariantId()))
+                    .map(this::buildExistingVariantCombinationKey)
+                    .collect(Collectors.toSet());
+
+            for (String combination : combinations) {
+                if (existingCombinations.contains(combination)) {
+                    throw new RuntimeException("Duplicate variant attribute combination");
+                }
+            }
+        }
+    }
+
+    private ItemVariant saveVariant(Item item, ItemVariant variant, ItemVariantRequest request) {
+        boolean creating = variant.getVariantId() == null;
+        String normalizedSku = normalizeVariantSku(request.getSku());
+        String combinationSignature = buildVariantCombinationKey(request.getAttributes());
+        variant.setItemId(item.getItemId());
+        variant.setBranchId(item.getBranchId());
+        variant.setSku(normalizedSku);
+        variant.setVariantSku(normalizedSku != null ? normalizedSku : buildInternalVariantSku(item, combinationSignature));
+        variant.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        variant.setCombinationSignature(combinationSignature);
+        variant.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
+        if (creating) {
+            variant.setCreatedAt(LocalDateTime.now());
+        }
+        variant.setUpdatedAt(LocalDateTime.now());
+
+        ItemVariant saved = itemVariantRepository.save(variant);
+        itemVariantAttributeRepository.deleteByVariantId(saved.getVariantId());
+        itemVariantAttributeRepository.flush();
+        itemVariantAttributeRepository.saveAll(toVariantAttributes(saved.getVariantId(), request.getAttributes()));
+        return saved;
+    }
+
+    private String buildInternalVariantSku(Item item, String combinationSignature) {
+        String seed = item.getBranchId() + ":" + item.getItemId() + ":" + combinationSignature;
+        return "V" + item.getItemId() + "-" + java.util.UUID.nameUUIDFromBytes(seed.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString()
+                .substring(0, 8)
+                .toUpperCase(Locale.ROOT);
+    }
+
+    private List<ItemVariantAttribute> toVariantAttributes(Long variantId, List<ItemVariantAttributeRequest> attributes) {
+        return attributes.stream()
+                .sorted(Comparator.comparing(attribute -> normalizeAttributeToken(attribute.getAttributeName())))
+                .map(attribute -> {
+                    ItemVariantAttribute entity = new ItemVariantAttribute();
+                    entity.setVariantId(variantId);
+                    entity.setAttributeName(attribute.getAttributeName().trim());
+                    entity.setAttributeValue(attribute.getAttributeValue().trim());
+                    return entity;
+                })
+                .collect(Collectors.toList());
+    }
+
+    private String buildVariantCombinationKey(List<ItemVariantAttributeRequest> attributes) {
+        if (attributes == null || attributes.isEmpty()) {
+            throw new RuntimeException("Variant must have at least one attribute");
+        }
+
+        Set<String> names = new HashSet<>();
+        List<String> parts = new ArrayList<>();
+        for (ItemVariantAttributeRequest attribute : attributes) {
+            if (attribute == null) {
+                throw new RuntimeException("Variant attribute is required");
+            }
+            if (!StringUtils.hasText(attribute.getAttributeName())) {
+                throw new RuntimeException("Variant attribute name is required");
+            }
+            if (!StringUtils.hasText(attribute.getAttributeValue())) {
+                throw new RuntimeException("Variant attribute value is required");
+            }
+
+            String name = normalizeAttributeToken(attribute.getAttributeName());
+            if (!names.add(name)) {
+                throw new RuntimeException("Duplicate attribute name in variant: " + attribute.getAttributeName().trim());
+            }
+            parts.add(name + "=" + normalizeAttributeToken(attribute.getAttributeValue()));
+        }
+
+        return parts.stream().sorted().collect(Collectors.joining("|"));
+    }
+
+    private String buildExistingVariantCombinationKey(ItemVariant variant) {
+        return itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variant.getVariantId())
+                .stream()
+                .map(attribute -> normalizeAttributeToken(attribute.getAttributeName()) + "=" + normalizeAttributeToken(attribute.getAttributeValue()))
+                .sorted()
+                .collect(Collectors.joining("|"));
+    }
+
+    private String describeAttributes(List<ItemVariantAttributeRequest> attributes) {
+        if (attributes == null) {
+            return "";
+        }
+        return attributes.stream()
+                .map(attribute -> attribute.getAttributeName().trim() + "=" + attribute.getAttributeValue().trim())
+                .sorted()
+                .collect(Collectors.joining(", "));
+    }
+
+    private String normalizeAttributeToken(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private String normalizeVariantSku(String sku) {
+        if (sku == null) {
+            return null;
+        }
+        String trimmed = sku.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private void validateVariantCanBeDeleted(ItemVariant variant) {
+        if (variant == null) {
+            throw new RuntimeException("Variant is required");
+        }
+
+        Long variantId = variant.getVariantId();
+        if (stockRepository.existsByVariantId(variantId)
+                || stockBatchRepository.existsByVariantId(variantId)
+                || stockMovementRepository.existsByVariantId(variantId)
+                || stockTransferItemRepository.existsByVariantId(variantId)
+                || stockCountItemRepository.existsByVariantId(variantId)
+                || orderProductRepository.existsByVariantId(variantId)
+                || salesReturnItemRepository.existsByVariantId(variantId)
+                || supplierItemRepository.existsByVariantId(variantId)
+                || purchaseOrderItemRepository.existsByVariantId(variantId)
+                || supplyProductRepository.existsByVariantId(variantId)
+                || purchaseReturnItemRepository.existsByVariantId(variantId)) {
+            throw new RuntimeException("Variant is already used in transactions or stock records and cannot be deleted");
+        }
+    }
+
+    private void deleteVariantsByItem(Long itemId) {
+        List<ItemVariant> variants = itemVariantRepository.findByItemIdOrderByVariantIdAsc(itemId);
+        if (variants.isEmpty()) {
+            return;
+        }
+
+        variants.forEach(this::validateVariantCanBeDeleted);
+        List<Long> variantIds = variants.stream().map(ItemVariant::getVariantId).collect(Collectors.toList());
+        itemVariantAttributeRepository.deleteByVariantIdIn(variantIds);
+        itemVariantRepository.deleteByItemId(itemId);
+    }
+
+    private ItemVariantResponse toVariantResponse(ItemVariant variant) {
+        ItemVariantResponse response = new ItemVariantResponse();
+        response.setVariantId(variant.getVariantId());
+        response.setItemId(variant.getItemId());
+        response.setBranchId(variant.getBranchId());
+        response.setSku(variant.getSku());
+        response.setDefaultSellingPrice(variant.getDefaultSellingPrice());
+        response.setIsActive(variant.getIsActive());
+        response.setCreatedAt(variant.getCreatedAt());
+        response.setUpdatedAt(variant.getUpdatedAt());
+        response.setAttributes(itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variant.getVariantId())
+                .stream()
+                .map(this::toVariantAttributeResponse)
+                .collect(Collectors.toList()));
+        return response;
+    }
+
+    private ItemVariantAttributeResponse toVariantAttributeResponse(ItemVariantAttribute attribute) {
+        ItemVariantAttributeResponse response = new ItemVariantAttributeResponse();
+        response.setAttributeId(attribute.getAttributeId());
+        response.setAttributeName(attribute.getAttributeName());
+        response.setAttributeValue(attribute.getAttributeValue());
+        return response;
     }
 }

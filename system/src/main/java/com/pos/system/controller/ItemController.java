@@ -6,6 +6,8 @@ import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
 import com.pos.system.dto.item.ItemUnitResponse;
+import com.pos.system.dto.item.ItemVariantRequest;
+import com.pos.system.dto.item.ItemVariantResponse;
 import com.pos.system.service.ItemService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -147,5 +149,45 @@ public class ItemController {
             @PathVariable Long unitId) {
         itemService.deleteUnit(itemId, unitId);
         return ResponseEntity.ok(ApiResponse.success("Item unit deleted successfully", null));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_VIEW')")
+    @GetMapping("/{itemId}/variants")
+    public ResponseEntity<ApiResponse<List<ItemVariantResponse>>> getVariantsByItem(@PathVariable Long itemId) {
+        return ResponseEntity.ok(ApiResponse.success("Item variants fetched successfully", itemService.getVariantsByItem(itemId)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_CREATE')")
+    @PostMapping("/{itemId}/variants")
+    public ResponseEntity<ApiResponse<ItemVariantResponse>> addVariant(
+            @PathVariable Long itemId,
+            @Valid @RequestBody ItemVariantRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Item variant created successfully", itemService.addVariant(itemId, request)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_UPDATE')")
+    @PutMapping("/{itemId}/variants/{variantId}")
+    public ResponseEntity<ApiResponse<ItemVariantResponse>> updateVariant(
+            @PathVariable Long itemId,
+            @PathVariable Long variantId,
+            @Valid @RequestBody ItemVariantRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Item variant updated successfully", itemService.updateVariant(itemId, variantId, request)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_UPDATE')")
+    @PatchMapping("/{itemId}/variants/{variantId}/toggle-active")
+    public ResponseEntity<ApiResponse<ItemVariantResponse>> toggleVariantActive(
+            @PathVariable Long itemId,
+            @PathVariable Long variantId) {
+        return ResponseEntity.ok(ApiResponse.success("Item variant status toggled successfully", itemService.toggleVariantActive(itemId, variantId)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_DELETE')")
+    @DeleteMapping("/{itemId}/variants/{variantId}")
+    public ResponseEntity<ApiResponse<Void>> deleteVariant(
+            @PathVariable Long itemId,
+            @PathVariable Long variantId) {
+        itemService.deleteVariant(itemId, variantId);
+        return ResponseEntity.ok(ApiResponse.success("Item variant deleted successfully", null));
     }
 }

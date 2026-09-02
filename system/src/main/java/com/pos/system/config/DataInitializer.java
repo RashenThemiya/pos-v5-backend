@@ -115,11 +115,12 @@ public class DataInitializer implements CommandLineRunner {
         if (!tableExists("purchase_order_items")
                 || !columnExists("purchase_order_items", "po_id")
                 || !columnExists("purchase_order_items", "item_id")
+                || !columnExists("purchase_order_items", "variant_id")
                 || !columnExists("purchase_order_items", "unit_id")) {
             return;
         }
 
-        List<String> poItemOnlyUniqueIndexes = jdbcTemplate.queryForList(
+        List<String> legacyUniqueIndexes = jdbcTemplate.queryForList(
                 """
                 SELECT INDEX_NAME
                 FROM INFORMATION_SCHEMA.STATISTICS
@@ -128,25 +129,28 @@ public class DataInitializer implements CommandLineRunner {
                   AND NON_UNIQUE = 0
                   AND INDEX_NAME <> 'PRIMARY'
                 GROUP BY INDEX_NAME
-                HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) = 'po_id,item_id'
+                HAVING GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) IN (
+                    'po_id,item_id',
+                    'po_id,item_id,unit_id'
+                )
                 """,
                 String.class
         );
 
-        for (String indexName : poItemOnlyUniqueIndexes) {
+        for (String indexName : legacyUniqueIndexes) {
             jdbcTemplate.execute("ALTER TABLE purchase_order_items DROP INDEX " + quoteIdentifier(indexName));
-            System.out.println("Removed wrong unique index on purchase_order_items(po_id, item_id): " + indexName);
+            System.out.println("Removed legacy unique index on purchase_order_items without variant_id: " + indexName);
         }
 
-        if (!uniqueIndexExists("purchase_order_items", "po_id,item_id,unit_id")) {
+        if (!uniqueIndexExists("purchase_order_items", "po_id,item_id,variant_id,unit_id")) {
             jdbcTemplate.execute(
                     """
                     ALTER TABLE purchase_order_items
-                    ADD CONSTRAINT uk_purchase_order_item_unit
-                    UNIQUE (po_id, item_id, unit_id)
+                    ADD CONSTRAINT uk_purchase_order_item_variant_unit
+                    UNIQUE (po_id, item_id, variant_id, unit_id)
                     """
             );
-            System.out.println("Added unique index on purchase_order_items(po_id, item_id, unit_id)");
+            System.out.println("Added unique index on purchase_order_items(po_id, item_id, variant_id, unit_id)");
         }
     }
 
