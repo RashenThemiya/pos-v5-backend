@@ -8,6 +8,7 @@ import java.math.BigDecimal;
 public class PurchaseReturnItemRequestDto {
 
     private Long itemId;
+    private Long variantId;
     private Long unitId;
     private String internalBatchBarcode;
 

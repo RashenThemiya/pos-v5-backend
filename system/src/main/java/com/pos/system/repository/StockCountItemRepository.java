@@ -8,4 +8,5 @@ import java.util.List;
 public interface StockCountItemRepository extends JpaRepository<StockCountItem, Long> {
     List<StockCountItem> findByStockCountId(Long stockCountId);
     void deleteByStockCountId(Long stockCountId);
+    boolean existsByVariantId(Long variantId);
 }

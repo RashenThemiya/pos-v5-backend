@@ -9,4 +9,6 @@ import java.util.Optional;
 public interface PurchaseOrderItemRepository extends JpaRepository<PurchaseOrderItem, Long> {
     List<PurchaseOrderItem> findByPoId(Long poId);
     Optional<PurchaseOrderItem> findByPoIdAndItemIdAndUnitId(Long poId, Long itemId, Long unitId);
+    Optional<PurchaseOrderItem> findByPoIdAndItemIdAndVariantIdAndUnitId(Long poId, Long itemId, Long variantId, Long unitId);
+    boolean existsByVariantId(Long variantId);
 }

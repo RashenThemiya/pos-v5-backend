@@ -1,6 +1,7 @@
 package com.pos.system.dto.item;
 
 import java.math.BigDecimal;
+import java.util.List;
 
 import org.springframework.web.multipart.MultipartFile;
 
@@ -29,4 +30,6 @@ public class ItemRequest {
       private MultipartFile imageFile;
       private BigDecimal minStock;
 private BigDecimal maxStock;
+    private String variantsJson;
+    private List<ItemVariantRequest> variants;
 }

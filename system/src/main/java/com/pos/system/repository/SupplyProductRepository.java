@@ -10,4 +10,5 @@ public interface SupplyProductRepository extends JpaRepository<SupplyProduct, Lo
     List<SupplyProduct> findBySupplyId(Long supplyId);
     Optional<SupplyProduct> findByInternalBatchBarcode(String internalBatchBarcode);
     boolean existsByInternalBatchBarcode(String internalBatchBarcode);
+    boolean existsByVariantId(Long variantId);
 }

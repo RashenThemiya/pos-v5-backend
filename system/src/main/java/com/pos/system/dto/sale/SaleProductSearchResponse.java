@@ -14,10 +14,12 @@ public class SaleProductSearchResponse {
     private String matchType;
     private ScanDto scan;
     private ItemDto item;
+    private VariantDto matchedVariant;
     private UnitDto matchedUnit;
     private BatchDto matchedBatch;
     private StockDto stock;
     private List<UnitDto> units;
+    private List<VariantDto> variants;
     private List<BatchDto> batches;
     private List<PromotionDto> promotions;
 
@@ -63,8 +65,19 @@ public class SaleProductSearchResponse {
 
     @Data
     @Builder
+    public static class VariantDto {
+        private Long variantId;
+        private String sku;
+        private String label;
+        private BigDecimal defaultSellingPrice;
+        private Boolean isActive;
+    }
+
+    @Data
+    @Builder
     public static class StockDto {
         private Long stockId;
+        private Long variantId;
         private Long unitId;
         private LocalDateTime lastUpdated;
     }
@@ -74,6 +87,9 @@ public class SaleProductSearchResponse {
     public static class BatchDto {
         private Long stockBatchId;
         private Long supplyProductId;
+        private Long variantId;
+        private String variantSku;
+        private String variantLabel;
         private Long unitId;
         private Long masterUnitId;
         private String unitName;

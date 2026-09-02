@@ -23,6 +23,8 @@ public class StockCountItem {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     private BigDecimal systemQty;
     private BigDecimal countedQty;
     private BigDecimal differenceQty;

@@ -26,6 +26,8 @@ import com.pos.system.repository.CashSessionTransactionRepository;
 import com.pos.system.repository.CustomerOrderRepository;
 import com.pos.system.repository.ItemRepository;
 import com.pos.system.repository.ItemUnitRepository;
+import com.pos.system.repository.ItemVariantAttributeRepository;
+import com.pos.system.repository.ItemVariantRepository;
 import com.pos.system.repository.PaymentRepository;
 import com.pos.system.repository.PurchaseOrderItemRepository;
 import com.pos.system.repository.PurchaseOrderRepository;
@@ -88,6 +90,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private StockMovementRepository stockMovementRepository;
     @Mock private ItemRepository itemRepository;
     @Mock private ItemUnitRepository itemUnitRepository;
+    @Mock private ItemVariantRepository itemVariantRepository;
+    @Mock private ItemVariantAttributeRepository itemVariantAttributeRepository;
     @Mock private UnitMasterRepository unitMasterRepository;
     @Mock private UnitConversionService unitConversionService;
     @Mock private CashSessionRepository cashSessionRepository;
@@ -124,6 +128,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 stockMovementRepository,
                 itemRepository,
                 itemUnitRepository,
+                itemVariantRepository,
+                itemVariantAttributeRepository,
                 unitMasterRepository,
                 unitConversionService,
                 cashSessionRepository,
@@ -154,6 +160,14 @@ class SupplierManagementServiceImplProcurementFlowTest {
                         invocation.getArgument(1),
                         invocation.getArgument(2),
                         invocation.getArgument(3)
+                )));
+        when(supplierItemRepository.findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(anyLong(), anyLong(), anyLong(), any(), anyLong()))
+                .thenAnswer(invocation -> Optional.of(activeSupplierItem(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4)
                 )));
         when(supplierItemRepository.save(any(SupplierItem.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
@@ -198,6 +212,18 @@ class SupplierManagementServiceImplProcurementFlowTest {
             return purchaseOrderItems.stream()
                     .filter(poLine -> poLine.getPoId().equals(poId)
                             && poLine.getItemId().equals(itemId)
+                            && poLine.getUnitId().equals(unitId))
+                    .findFirst();
+        });
+        when(purchaseOrderItemRepository.findByPoIdAndItemIdAndVariantIdAndUnitId(anyLong(), anyLong(), any(), anyLong())).thenAnswer(invocation -> {
+            Long poId = invocation.getArgument(0);
+            Long itemId = invocation.getArgument(1);
+            Long variantId = invocation.getArgument(2);
+            Long unitId = invocation.getArgument(3);
+            return purchaseOrderItems.stream()
+                    .filter(poLine -> poLine.getPoId().equals(poId)
+                            && poLine.getItemId().equals(itemId)
+                            && java.util.Objects.equals(poLine.getVariantId(), variantId)
                             && poLine.getUnitId().equals(unitId))
                     .findFirst();
         });
@@ -556,10 +582,15 @@ class SupplierManagementServiceImplProcurementFlowTest {
     }
 
     private SupplierItem activeSupplierItem(Long branchId, Long supplierId, Long itemId, Long unitId) {
+        return activeSupplierItem(branchId, supplierId, itemId, null, unitId);
+    }
+
+    private SupplierItem activeSupplierItem(Long branchId, Long supplierId, Long itemId, Long variantId, Long unitId) {
         SupplierItem supplierItem = new SupplierItem();
         supplierItem.setBranchId(branchId);
         supplierItem.setSupplierId(supplierId);
         supplierItem.setItemId(itemId);
+        supplierItem.setVariantId(variantId);
         supplierItem.setUnitId(unitId);
         supplierItem.setIsActive(true);
         return supplierItem;

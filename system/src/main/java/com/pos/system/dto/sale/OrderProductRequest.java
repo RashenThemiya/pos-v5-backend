@@ -7,6 +7,7 @@ import java.math.BigDecimal;
 @Data
 public class OrderProductRequest {
     private Long itemId;
+    private Long variantId;
     private Long unitId;
     private String batchBarcode;    // optional — specific batch to deduct from; FIFO if omitted
     private BigDecimal quantity;

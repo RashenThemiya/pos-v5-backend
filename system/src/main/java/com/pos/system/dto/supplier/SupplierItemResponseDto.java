@@ -17,6 +17,9 @@ public class SupplierItemResponseDto {
     private String supplierName;
 
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private String itemName;
     private String sku;
 

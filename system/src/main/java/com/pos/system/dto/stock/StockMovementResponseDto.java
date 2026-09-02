@@ -13,6 +13,9 @@ public class StockMovementResponseDto {
     private Long branchId;
     private String movementType;
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private Long unitId;
     private String internalBatchBarcode;
     private BigDecimal quantity;

@@ -8,6 +8,7 @@ import java.time.LocalDate;
 @Data
 public class SupplyProductRequestDto {
     private Long itemId;
+    private Long variantId;
     private Long unitId;
     private String batchNo;
     private String supplierBatchBarcode;

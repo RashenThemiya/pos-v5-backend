@@ -3,6 +3,7 @@ package com.pos.system.service;
 import com.pos.system.dto.sale.*;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.ScaleBarcodeSetting;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.catalog.UnitMaster;
@@ -48,6 +49,8 @@ public class SalesServiceImpl implements SalesService {
     private final ItemUnitRepository itemUnitRepository;
     private final UnitMasterRepository unitMasterRepository;
     private final ItemRepository itemRepository;
+    private final ItemVariantRepository itemVariantRepository;
+    private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final ScaleBarcodeSettingRepository scaleBarcodeSettingRepository;
     private final ScaleItemMappingRepository scaleItemMappingRepository;
     private final PromotionRepository promotionRepository;
@@ -110,6 +113,7 @@ public class SalesServiceImpl implements SalesService {
         // save items and deduct stock
         BigDecimal subtotal = BigDecimal.ZERO;
         for (OrderProductRequest item : request.getItems()) {
+            item.setVariantId(resolveOrderLineVariantId(request.getBranchId(), item));
             BigDecimal lineDiscount = nvl(item.getDiscount());
             BigDecimal lineTotal = item.getUnitPrice()
                     .multiply(item.getQuantity())
@@ -119,6 +123,7 @@ public class SalesServiceImpl implements SalesService {
             OrderProduct op = new OrderProduct();
             op.setOrderId(savedOrder.getOrderId());
             op.setItemId(item.getItemId());
+            op.setVariantId(item.getVariantId());
             op.setUnitId(item.getUnitId());
             op.setBatchBarcode(item.getBatchBarcode());
             op.setQuantity(item.getQuantity());
@@ -222,7 +227,18 @@ public class SalesServiceImpl implements SalesService {
                 .ifPresent(unit -> addResult(results, buildSaleSearchResult(
                         "ITEM_UNIT_BARCODE",
                         findActiveItem(branchId, unit.getItemId()),
+                        null,
                         unit,
+                        null,
+                        null
+                )));
+
+        itemVariantRepository.findByBranchIdAndSku(branchId, normalized)
+                .ifPresent(variant -> addResult(results, buildSaleSearchResult(
+                        "VARIANT_SKU",
+                        findActiveItem(branchId, variant.getItemId()),
+                        variant,
+                        findBaseUnit(variant.getItemId()).orElse(null),
                         null,
                         null
                 )));
@@ -233,6 +249,7 @@ public class SalesServiceImpl implements SalesService {
                 .forEach(batch -> addResult(results, buildSaleSearchResult(
                         "STOCK_BATCH",
                         findActiveItem(branchId, batch.getItemId()),
+                        resolveVariant(batch.getVariantId()).orElse(null),
                         findUnit(batch.getItemId(), batch.getUnitId()).orElse(null),
                         batch,
                         null
@@ -242,6 +259,7 @@ public class SalesServiceImpl implements SalesService {
                 .forEach(item -> addResult(results, buildSaleSearchResult(
                         "ITEM",
                         item,
+                        null,
                         findBaseUnit(item.getItemId()).orElse(null),
                         null,
                         null
@@ -376,6 +394,8 @@ public class SalesServiceImpl implements SalesService {
             SalesReturnItem returnItem = new SalesReturnItem();
             returnItem.setReturnId(savedReturn.getReturnId());
             returnItem.setItemId(item.getItemId());
+            item.setVariantId(resolveReturnLineVariantId(request.getBranchId(), item));
+            returnItem.setVariantId(item.getVariantId());
             returnItem.setInternalBatchBarcode(item.getInternalBatchBarcode());
             returnItem.setQuantity(item.getQuantity());
             returnItem.setUnitPrice(item.getUnitPrice());
@@ -438,10 +458,10 @@ public class SalesServiceImpl implements SalesService {
         BigDecimal baseQty = item.getQuantity().multiply(multiplier);
 
         // update stock total
-        Stock stock = stockRepository.findByBranchIdAndItemId(branchId, item.getItemId())
+        Stock stock = findStock(branchId, item.getItemId(), item.getVariantId())
                 .orElseThrow(() -> new RuntimeException("No stock record for item: " + item.getItemId()));
 
-        BigDecimal availableQty = getBatchQtyTotal(branchId, item.getItemId(), StockQtyType.AVAILABLE);
+        BigDecimal availableQty = getBatchQtyTotal(branchId, item.getItemId(), item.getVariantId(), StockQtyType.AVAILABLE);
         if (availableQty.compareTo(baseQty) < 0) {
             throw new RuntimeException("Insufficient stock for item: " + item.getItemId()
                     + " (available: " + availableQty + ", required: " + baseQty + ")");
@@ -455,12 +475,15 @@ public class SalesServiceImpl implements SalesService {
             StockBatch batch = stockBatchRepository
                     .findByBranchIdAndInternalBatchBarcode(branchId, item.getBatchBarcode())
                     .orElseThrow(() -> new RuntimeException("Batch not found: " + item.getBatchBarcode()));
+            if (!sameVariant(batch.getVariantId(), item.getVariantId())) {
+                throw new RuntimeException("Batch does not belong to selected variant");
+            }
             batch.setQtyRemaining(batch.getQtyRemaining().subtract(baseQty));
             batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(baseQty));
             stockBatchRepository.save(batch);
         } else {
             // FIFO — deduct from oldest batches first
-            deductFIFO(branchId, item.getItemId(), baseQty);
+            deductFIFO(branchId, item.getItemId(), item.getVariantId(), baseQty);
         }
 
         // record stock movement
@@ -468,6 +491,7 @@ public class SalesServiceImpl implements SalesService {
         movement.setBranchId(branchId);
         movement.setMovementType("SALE");
         movement.setItemId(item.getItemId());
+        movement.setVariantId(item.getVariantId());
         movement.setUnitId(item.getUnitId());
         movement.setInternalBatchBarcode(item.getBatchBarcode());
         movement.setQuantity(baseQty.negate());
@@ -480,9 +504,9 @@ public class SalesServiceImpl implements SalesService {
         stockMovementRepository.save(movement);
     }
 
-    private void deductFIFO(Long branchId, Long itemId, BigDecimal baseQtyToDeduct) {
+    private void deductFIFO(Long branchId, Long itemId, Long variantId, BigDecimal baseQtyToDeduct) {
         List<StockBatch> batches = stockBatchRepository
-                .findByBranchIdAndItemIdOrderByCreatedAtDesc(branchId, itemId);
+                .findByBranchIdAndItemIdAndVariantIdOrderByCreatedAtDesc(branchId, itemId, variantId);
 
         // reverse to get oldest first
         java.util.Collections.reverse(batches);
@@ -508,7 +532,7 @@ public class SalesServiceImpl implements SalesService {
 
         BigDecimal baseQty = op.getQuantity().multiply(multiplier);
 
-        stockRepository.findByBranchIdAndItemId(branchId, op.getItemId()).ifPresent(stock -> {
+        findStock(branchId, op.getItemId(), op.getVariantId()).ifPresent(stock -> {
             stock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(stock);
         });
@@ -526,6 +550,7 @@ public class SalesServiceImpl implements SalesService {
         movement.setBranchId(branchId);
         movement.setMovementType("SALE_CANCEL");
         movement.setItemId(op.getItemId());
+        movement.setVariantId(op.getVariantId());
         movement.setUnitId(op.getUnitId());
         movement.setInternalBatchBarcode(op.getBatchBarcode());
         movement.setQuantity(baseQty);
@@ -542,7 +567,7 @@ public class SalesServiceImpl implements SalesService {
         // only add back to stock if condition is GOOD
         if (!"GOOD".equalsIgnoreCase(item.getCondition())) {
             // damaged/expired — move to damaged stock
-            stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
+            findStock(branchId, item.getItemId(), item.getVariantId()).ifPresent(stock -> {
                 stock.setLastUpdated(LocalDateTime.now());
                 stockRepository.save(stock);
             });
@@ -558,7 +583,7 @@ public class SalesServiceImpl implements SalesService {
                         });
             }
         } else {
-            stockRepository.findByBranchIdAndItemId(branchId, item.getItemId()).ifPresent(stock -> {
+            findStock(branchId, item.getItemId(), item.getVariantId()).ifPresent(stock -> {
                 stock.setLastUpdated(LocalDateTime.now());
                 stockRepository.save(stock);
 
@@ -577,6 +602,7 @@ public class SalesServiceImpl implements SalesService {
         movement.setBranchId(branchId);
         movement.setMovementType("SALE_RETURN");
         movement.setItemId(item.getItemId());
+        movement.setVariantId(item.getVariantId());
         movement.setUnitId(1L); // base unit for returns
         movement.setInternalBatchBarcode(item.getInternalBatchBarcode());
         movement.setQuantity(item.getQuantity());
@@ -627,22 +653,31 @@ public class SalesServiceImpl implements SalesService {
                 .encodedPrice(encodedPrice)
                 .build();
 
-        return Optional.of(buildSaleSearchResult("SCALE_BARCODE", item, unit, null, scan));
+        return Optional.of(buildSaleSearchResult("SCALE_BARCODE", item, null, unit, null, scan));
     }
 
-    private SaleProductSearchResponse buildSaleSearchResult(String matchType, Item item, ItemUnit matchedUnit,
+    private SaleProductSearchResponse buildSaleSearchResult(String matchType, Item item, ItemVariant matchedVariant, ItemUnit matchedUnit,
                                                             StockBatch matchedBatch, SaleProductSearchResponse.ScanDto scan) {
         List<ItemUnit> units = itemUnitRepository.findByItemIdAndIsActiveTrue(item.getItemId());
-        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(item.getBranchId(), item.getItemId());
+        List<ItemVariant> variants = itemVariantRepository.findByItemIdOrderByVariantIdAsc(item.getItemId())
+                .stream()
+                .filter(variant -> Boolean.TRUE.equals(variant.getIsActive()))
+                .toList();
+        Long variantId = matchedVariant != null ? matchedVariant.getVariantId() : matchedBatch != null ? matchedBatch.getVariantId() : null;
+        List<StockBatch> batches = variantId != null
+                ? stockBatchRepository.findByBranchIdAndItemIdAndVariantIdOrderByCreatedAtDesc(item.getBranchId(), item.getItemId(), variantId)
+                : stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(item.getBranchId(), item.getItemId());
 
         return SaleProductSearchResponse.builder()
                 .matchType(matchType)
                 .scan(scan)
                 .item(mapSearchItem(item))
+                .matchedVariant(matchedVariant != null ? mapSearchVariant(matchedVariant) : null)
                 .matchedUnit(matchedUnit != null ? mapSearchUnit(matchedUnit) : null)
                 .matchedBatch(matchedBatch != null ? mapSearchBatch(matchedBatch) : null)
-                .stock(stockRepository.findByBranchIdAndItemId(item.getBranchId(), item.getItemId()).map(this::mapSearchStock).orElse(null))
+                .stock(findStock(item.getBranchId(), item.getItemId(), variantId).map(this::mapSearchStock).orElse(null))
                 .units(units.stream().map(this::mapSearchUnit).toList())
+                .variants(variants.stream().map(this::mapSearchVariant).toList())
                 .batches(batches.stream().map(this::mapSearchBatch).toList())
                 .promotions(findSalePromotions(item, matchedBatch))
                 .build();
@@ -726,9 +761,20 @@ public class SalesServiceImpl implements SalesService {
                 .build();
     }
 
+    private SaleProductSearchResponse.VariantDto mapSearchVariant(ItemVariant variant) {
+        return SaleProductSearchResponse.VariantDto.builder()
+                .variantId(variant.getVariantId())
+                .sku(variant.getSku())
+                .label(resolveVariantLabel(variant.getVariantId()))
+                .defaultSellingPrice(variant.getDefaultSellingPrice())
+                .isActive(variant.getIsActive())
+                .build();
+    }
+
     private SaleProductSearchResponse.StockDto mapSearchStock(Stock stock) {
         return SaleProductSearchResponse.StockDto.builder()
                 .stockId(stock.getStockId())
+                .variantId(stock.getVariantId())
                 .unitId(stock.getUnitId())
                 .lastUpdated(stock.getLastUpdated())
                 .build();
@@ -739,6 +785,9 @@ public class SalesServiceImpl implements SalesService {
         return SaleProductSearchResponse.BatchDto.builder()
                 .stockBatchId(batch.getStockBatchId())
                 .supplyProductId(batch.getSupplyProductId())
+                .variantId(batch.getVariantId())
+                .variantSku(resolveVariantSku(batch.getVariantId()))
+                .variantLabel(resolveVariantLabel(batch.getVariantId()))
                 .unitId(batch.getUnitId())
                 .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
                 .unitName(resolveUnitName(unit))
@@ -764,7 +813,8 @@ public class SalesServiceImpl implements SalesService {
             return;
         }
         String batchKey = response.getMatchedBatch() != null ? ":batch:" + response.getMatchedBatch().getStockBatchId() : "";
-        results.putIfAbsent(response.getItem().getItemId() + batchKey, response);
+        String variantKey = response.getMatchedVariant() != null ? ":variant:" + response.getMatchedVariant().getVariantId() : "";
+        results.putIfAbsent(response.getItem().getItemId() + variantKey + batchKey, response);
     }
 
     private Item findActiveItem(Long branchId, Long itemId) {
@@ -942,6 +992,9 @@ public class SalesServiceImpl implements SalesService {
                 .orderProductId(op.getOrderProductId())
                 .orderId(op.getOrderId())
                 .itemId(op.getItemId())
+                .variantId(op.getVariantId())
+                .variantSku(resolveVariantSku(op.getVariantId()))
+                .variantLabel(resolveVariantLabel(op.getVariantId()))
                 .itemName(itemName)
                 .unitId(op.getUnitId())
                 .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
@@ -996,6 +1049,9 @@ public class SalesServiceImpl implements SalesService {
                     return SalesReturnResponse.ReturnItemResponse.builder()
                             .returnItemId(ri.getReturnItemId())
                             .itemId(ri.getItemId())
+                            .variantId(ri.getVariantId())
+                            .variantSku(resolveVariantSku(ri.getVariantId()))
+                            .variantLabel(resolveVariantLabel(ri.getVariantId()))
                             .itemName(itemName)
                             .internalBatchBarcode(ri.getInternalBatchBarcode())
                             .quantity(ri.getQuantity())
@@ -1025,8 +1081,8 @@ public class SalesServiceImpl implements SalesService {
         return value != null ? value : BigDecimal.ZERO;
     }
 
-    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
-        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, Long variantId, StockQtyType type) {
+        return stockBatchRepository.findByBranchIdAndItemIdAndVariantId(branchId, itemId, variantId)
                 .stream()
                 .map(batch -> switch (type) {
                     case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
@@ -1034,6 +1090,74 @@ public class SalesServiceImpl implements SalesService {
                     case EXPIRED -> nvlQty(batch.getExpiredQty());
                 })
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private Optional<Stock> findStock(Long branchId, Long itemId, Long variantId) {
+        return stockRepository.findByBranchIdAndItemIdAndVariantId(branchId, itemId, variantId);
+    }
+
+    private Optional<ItemVariant> resolveVariant(Long variantId) {
+        return variantId == null ? Optional.empty() : itemVariantRepository.findById(variantId);
+    }
+
+    private String resolveVariantSku(Long variantId) {
+        return resolveVariant(variantId)
+                .map(ItemVariant::getSku)
+                .orElse(null);
+    }
+
+    private String resolveVariantLabel(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        String label = itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId)
+                .stream()
+                .map(attribute -> attribute.getAttributeName() + ": " + attribute.getAttributeValue())
+                .reduce((left, right) -> left + " / " + right)
+                .orElse(null);
+        return label != null && !label.isBlank() ? label : resolveVariantSku(variantId);
+    }
+
+    private Long resolveOrderLineVariantId(Long branchId, OrderProductRequest item) {
+        Long batchVariantId = resolveBatchVariantId(branchId, item.getItemId(), item.getBatchBarcode());
+        Long variantId = batchVariantId != null ? batchVariantId : item.getVariantId();
+        validateVariant(branchId, item.getItemId(), variantId);
+        return variantId;
+    }
+
+    private Long resolveReturnLineVariantId(Long branchId, SalesReturnRequest.ReturnItemDto item) {
+        Long batchVariantId = resolveBatchVariantId(branchId, item.getItemId(), item.getInternalBatchBarcode());
+        Long variantId = batchVariantId != null ? batchVariantId : item.getVariantId();
+        validateVariant(branchId, item.getItemId(), variantId);
+        return variantId;
+    }
+
+    private Long resolveBatchVariantId(Long branchId, Long itemId, String batchBarcode) {
+        if (batchBarcode == null || batchBarcode.isBlank()) {
+            return null;
+        }
+        return stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, batchBarcode)
+                .filter(batch -> itemId.equals(batch.getItemId()))
+                .map(StockBatch::getVariantId)
+                .orElse(null);
+    }
+
+    private void validateVariant(Long branchId, Long itemId, Long variantId) {
+        if (variantId == null) {
+            return;
+        }
+        ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .orElseThrow(() -> new RuntimeException("Variant not found for item: " + variantId));
+        if (!variant.getBranchId().equals(branchId)) {
+            throw new RuntimeException("Variant does not belong to branch: " + variantId);
+        }
+        if (!Boolean.TRUE.equals(variant.getIsActive())) {
+            throw new RuntimeException("Variant is inactive: " + variantId);
+        }
+    }
+
+    private boolean sameVariant(Long left, Long right) {
+        return java.util.Objects.equals(left, right);
     }
 
     private enum StockQtyType {

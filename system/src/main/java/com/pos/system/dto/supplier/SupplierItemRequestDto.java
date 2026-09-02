@@ -10,6 +10,7 @@ public class SupplierItemRequestDto {
     private Long branchId;
     private Long supplierId;
     private Long itemId;
+    private Long variantId;
     private Long unitId;
 
     private BigDecimal lastPurchaseCost;

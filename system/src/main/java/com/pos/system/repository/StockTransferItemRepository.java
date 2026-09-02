@@ -7,4 +7,5 @@ import java.util.List;
 
 public interface StockTransferItemRepository extends JpaRepository<StockTransferItem, Long> {
     List<StockTransferItem> findByTransferId(Long transferId);
+    boolean existsByVariantId(Long variantId);
 }

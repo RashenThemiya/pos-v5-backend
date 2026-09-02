@@ -18,6 +18,7 @@ public class SalesReturnRequest {
     @Data
     public static class ReturnItemDto {
         private Long itemId;
+        private Long variantId;
         private String internalBatchBarcode;
         private BigDecimal quantity;
         private BigDecimal unitPrice;

@@ -15,7 +15,17 @@ public interface SupplierItemRepository extends JpaRepository<SupplierItem, Long
             Long unitId
     );
 
+    Optional<SupplierItem> findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(
+            Long branchId,
+            Long supplierId,
+            Long itemId,
+            Long variantId,
+            Long unitId
+    );
+
     List<SupplierItem> findByBranchIdAndSupplierIdAndIsActiveTrue(Long branchId, Long supplierId);
 
     List<SupplierItem> findByBranchIdAndItemIdAndIsActiveTrue(Long branchId, Long itemId);
+
+    boolean existsByVariantId(Long variantId);
 }

@@ -23,6 +23,8 @@ public class StockTransferItem {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     private String internalBatchBarcode;
     @Column(nullable = false)
     private BigDecimal quantity;

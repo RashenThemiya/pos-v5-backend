@@ -24,6 +24,7 @@ public class ItemResponse {
     private LocalDateTime updatedAt;
     private String scaleItemCode;
     private List<ItemUnitResponse> units;
+    private List<ItemVariantResponse> variants;
     private BigDecimal minStock;
 private BigDecimal maxStock;
 }

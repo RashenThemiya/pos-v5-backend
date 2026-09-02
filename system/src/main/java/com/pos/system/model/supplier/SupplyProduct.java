@@ -26,6 +26,8 @@ public class SupplyProduct {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     @Column(nullable = false)
     private Long unitId;
 

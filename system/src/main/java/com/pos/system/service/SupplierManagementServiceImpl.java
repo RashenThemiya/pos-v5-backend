@@ -5,6 +5,7 @@ import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.sale.CustomerOrder;
 import com.pos.system.model.sale.Payment;
@@ -56,6 +57,8 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private final ItemRepository itemRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final ItemVariantRepository itemVariantRepository;
+    private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final UnitMasterRepository unitMasterRepository;
     private final UnitConversionService unitConversionService;
 
@@ -143,23 +146,25 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             throw new RuntimeException("Supplier does not belong to this branch");
         }
 
-        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+        validateItemUnitAndVariant(dto.getBranchId(), dto.getItemId(), dto.getUnitId(), dto.getVariantId());
 
         supplierItemRepository
-                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(
+                .findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(
                         dto.getBranchId(),
                         dto.getSupplierId(),
                         dto.getItemId(),
+                        dto.getVariantId(),
                         dto.getUnitId()
                 )
                 .ifPresent(x -> {
-                    throw new RuntimeException("Supplier already supplies this item with this unit");
+                    throw new RuntimeException("Supplier already supplies this item/variant with this unit");
                 });
 
         SupplierItem supplierItem = new SupplierItem();
         supplierItem.setBranchId(dto.getBranchId());
         supplierItem.setSupplierId(dto.getSupplierId());
         supplierItem.setItemId(dto.getItemId());
+        supplierItem.setVariantId(dto.getVariantId());
         supplierItem.setUnitId(dto.getUnitId());
         supplierItem.setLastPurchaseCost(nvlMoney(dto.getLastPurchaseCost()));
         supplierItem.setDefaultCostPrice(nvlMoney(dto.getDefaultCostPrice()));
@@ -183,11 +188,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             throw new RuntimeException("Supplier does not belong to this branch");
         }
 
-        validateItemAndUnit(dto.getBranchId(), dto.getItemId(), dto.getUnitId());
+        validateItemUnitAndVariant(dto.getBranchId(), dto.getItemId(), dto.getUnitId(), dto.getVariantId());
 
         supplierItem.setBranchId(dto.getBranchId());
         supplierItem.setSupplierId(dto.getSupplierId());
         supplierItem.setItemId(dto.getItemId());
+        supplierItem.setVariantId(dto.getVariantId());
         supplierItem.setUnitId(dto.getUnitId());
         supplierItem.setLastPurchaseCost(nvlMoney(dto.getLastPurchaseCost()));
         supplierItem.setDefaultCostPrice(nvlMoney(dto.getDefaultCostPrice()));
@@ -271,18 +277,20 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         PurchaseOrder savedPo = purchaseOrderRepository.save(po);
 
         for (PurchaseOrderItemRequestDto itemDto : normalizedItems) {
-            validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
+            validateItemUnitAndVariant(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId(), itemDto.getVariantId());
 
             validateSupplierProvidesItem(
                     dto.getBranchId(),
                     dto.getSupplierId(),
                     itemDto.getItemId(),
+                    itemDto.getVariantId(),
                     itemDto.getUnitId()
             );
 
             PurchaseOrderItem item = new PurchaseOrderItem();
             item.setPoId(savedPo.getPoId());
             item.setItemId(itemDto.getItemId());
+            item.setVariantId(itemDto.getVariantId());
             item.setUnitId(itemDto.getUnitId());
             item.setOrderedQty(nvlQty(itemDto.getOrderedQty()));
             item.setReceivedQty(BigDecimal.ZERO);
@@ -311,6 +319,9 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                             .poItemId(item.getPoItemId())
                             .poId(item.getPoId())
                             .itemId(item.getItemId())
+                            .variantId(item.getVariantId())
+                            .variantSku(resolveVariantSku(item.getVariantId()))
+                            .variantLabel(resolveVariantLabel(item.getVariantId()))
                             .unitId(item.getUnitId())
                             .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
                             .unitName(resolveUnitName(unit))
@@ -449,12 +460,13 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         BigDecimal calculatedSubtotal = BigDecimal.ZERO;
 
         for (SupplyProductRequestDto p : dto.getProducts()) {
-            validateItemAndUnit(dto.getBranchId(), p.getItemId(), p.getUnitId());
+            validateItemUnitAndVariant(dto.getBranchId(), p.getItemId(), p.getUnitId(), p.getVariantId());
 
             validateSupplierProvidesItem(
                     dto.getBranchId(),
                     dto.getSupplierId(),
                     p.getItemId(),
+                    p.getVariantId(),
                     p.getUnitId()
             );
 
@@ -466,6 +478,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             SupplyProduct product = new SupplyProduct();
             product.setSupplyId(savedSupply.getSupplyId());
             product.setItemId(p.getItemId());
+            product.setVariantId(p.getVariantId());
             product.setUnitId(p.getUnitId());
             product.setBatchNo(p.getBatchNo());
             product.setSupplierBatchBarcode(p.getSupplierBatchBarcode());
@@ -491,6 +504,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                         dto.getBranchId(),
                         dto.getSupplierId(),
                         p.getItemId(),
+                        p.getVariantId(),
                         p.getUnitId(),
                         savedProduct.getCostPrice()
                 );
@@ -615,6 +629,9 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                             .supplyProductId(product.getSupplyProductId())
                             .supplyId(product.getSupplyId())
                             .itemId(product.getItemId())
+                            .variantId(product.getVariantId())
+                            .variantSku(resolveVariantSku(product.getVariantId()))
+                            .variantLabel(resolveVariantLabel(product.getVariantId()))
                             .unitId(product.getUnitId())
                             .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
                             .unitName(resolveUnitName(unit))
@@ -914,11 +931,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(product.getItemId())
                 .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + product.getItemId()));
 
-        Stock stock = stockRepository.findByBranchIdAndItemId(supply.getBranchId(), product.getItemId())
+        Stock stock = stockRepository.findByBranchIdAndItemIdAndVariantId(supply.getBranchId(), product.getItemId(), product.getVariantId())
                 .orElseGet(() -> {
                     Stock s = new Stock();
                     s.setBranchId(supply.getBranchId());
                     s.setItemId(product.getItemId());
+                    s.setVariantId(product.getVariantId());
                     s.setUnitId(baseUnit.getUnitId());
                     return s;
                 });
@@ -929,6 +947,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         StockBatch batch = new StockBatch();
         batch.setBranchId(supply.getBranchId());
         batch.setItemId(product.getItemId());
+        batch.setVariantId(product.getVariantId());
         batch.setSupplyProductId(product.getSupplyProductId());
         batch.setUnitId(product.getUnitId());
         batch.setReceivedQty(product.getQuantityReceived());
@@ -955,6 +974,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         movement.setBranchId(supply.getBranchId());
         movement.setMovementType("PURCHASE_IN");
         movement.setItemId(product.getItemId());
+        movement.setVariantId(product.getVariantId());
         movement.setUnitId(product.getUnitId());
         movement.setInternalBatchBarcode(product.getInternalBatchBarcode());
         movement.setQuantity(product.getQuantityReceivedBase());
@@ -973,7 +993,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         if (poId == null) return;
 
         PurchaseOrderItem poItem = purchaseOrderItemRepository
-                .findByPoIdAndItemIdAndUnitId(poId, product.getItemId(), product.getUnitId())
+                .findByPoIdAndItemIdAndVariantIdAndUnitId(poId, product.getItemId(), product.getVariantId(), product.getUnitId())
                 .orElse(null);
 
         if (poItem != null) {
@@ -1032,14 +1052,14 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             }
 
             for (SupplyProduct product : supplyProductRepository.findBySupplyId(supply.getSupplyId())) {
-                String key = poLineKey(product.getItemId(), product.getUnitId());
+                String key = poLineKey(product.getItemId(), product.getVariantId(), product.getUnitId());
                 receivedByLine.merge(key, nvlQty(product.getQuantityReceived()), BigDecimal::add);
             }
         }
 
         for (PurchaseOrderItem item : poItems) {
             item.setReceivedQty(receivedByLine.getOrDefault(
-                    poLineKey(item.getItemId(), item.getUnitId()),
+                    poLineKey(item.getItemId(), item.getVariantId(), item.getUnitId()),
                     BigDecimal.ZERO
             ));
             purchaseOrderItemRepository.save(item);
@@ -1216,20 +1236,22 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 throw new RuntimeException("Received quantity must be greater than zero");
             }
 
-            String key = poLineKey(product.getItemId(), product.getUnitId());
+            String key = poLineKey(product.getItemId(), product.getVariantId(), product.getUnitId());
             requestQtyByLine.merge(key, quantityReceived, BigDecimal::add);
         }
 
         for (Map.Entry<String, BigDecimal> entry : requestQtyByLine.entrySet()) {
             String[] keyParts = entry.getKey().split("-");
             Long itemId = Long.valueOf(keyParts[0]);
-            Long unitId = Long.valueOf(keyParts[1]);
+            Long parsedVariantId = Long.valueOf(keyParts[1]);
+            Long variantId = parsedVariantId == 0L ? null : parsedVariantId;
+            Long unitId = Long.valueOf(keyParts[2]);
 
             PurchaseOrderItem poItem = purchaseOrderItemRepository
-                    .findByPoIdAndItemIdAndUnitId(dto.getPoId(), itemId, unitId)
+                    .findByPoIdAndItemIdAndVariantIdAndUnitId(dto.getPoId(), itemId, variantId, unitId)
                     .orElseThrow(() -> new RuntimeException(
-                            "Received item/unit is not on the purchase order: itemId="
-                                    + itemId + ", unitId=" + unitId
+                            "Received item/variant/unit is not on the purchase order: itemId="
+                                    + itemId + ", variantId=" + variantId + ", unitId=" + unitId
                     ));
 
             BigDecimal remainingQty = nvlQty(poItem.getOrderedQty())
@@ -1238,7 +1260,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             if (entry.getValue().compareTo(remainingQty) > 0) {
                 throw new RuntimeException(
                         "Received quantity exceeds remaining purchase order quantity for itemId="
-                                + itemId + ", unitId=" + unitId
+                                + itemId + ", variantId=" + variantId + ", unitId=" + unitId
                 );
             }
         }
@@ -1262,11 +1284,11 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         }
     }
 
-    private String poLineKey(Long itemId, Long unitId) {
-        return itemId + "-" + unitId;
+    private String poLineKey(Long itemId, Long variantId, Long unitId) {
+        return itemId + "-" + (variantId != null ? variantId : 0L) + "-" + unitId;
     }
 
-    private void validateItemAndUnit(Long branchId, Long itemId, Long unitId) {
+    private void validateItemUnitAndVariant(Long branchId, Long itemId, Long unitId, Long variantId) {
         Item item = itemRepository.findByItemIdAndIsActiveTrue(itemId)
                 .orElseThrow(() -> new RuntimeException("Item not found or inactive: " + itemId));
 
@@ -1282,18 +1304,29 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         if (!itemUnit.getBranchId().equals(branchId)) {
             throw new RuntimeException("Unit does not belong to branch for unitId=" + unitId);
         }
+
+        if (variantId != null) {
+            ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                    .orElseThrow(() -> new RuntimeException("Variant not found for item: " + variantId));
+            if (!variant.getBranchId().equals(branchId)) {
+                throw new RuntimeException("Variant does not belong to branch: " + variantId);
+            }
+            if (!Boolean.TRUE.equals(variant.getIsActive())) {
+                throw new RuntimeException("Variant is inactive: " + variantId);
+            }
+        }
     }
 
-    private void validateSupplierProvidesItem(Long branchId, Long supplierId, Long itemId, Long unitId) {
+    private void validateSupplierProvidesItem(Long branchId, Long supplierId, Long itemId, Long variantId, Long unitId) {
         SupplierItem supplierItem = supplierItemRepository
-                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(branchId, supplierId, itemId, unitId)
+                .findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(branchId, supplierId, itemId, variantId, unitId)
                 .orElseThrow(() -> new RuntimeException(
-                        "Supplier does not supply itemId=" + itemId + " with unitId=" + unitId
+                        "Supplier does not supply itemId=" + itemId + ", variantId=" + variantId + " with unitId=" + unitId
                 ));
 
         if (!Boolean.TRUE.equals(supplierItem.getIsActive())) {
             throw new RuntimeException(
-                    "Supplier item mapping is inactive for itemId=" + itemId + " with unitId=" + unitId
+                    "Supplier item mapping is inactive for itemId=" + itemId + ", variantId=" + variantId + " with unitId=" + unitId
             );
         }
     }
@@ -1302,11 +1335,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             Long branchId,
             Long supplierId,
             Long itemId,
+            Long variantId,
             Long unitId,
             BigDecimal costPrice
     ) {
         supplierItemRepository
-                .findByBranchIdAndSupplierIdAndItemIdAndUnitId(branchId, supplierId, itemId, unitId)
+                .findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(branchId, supplierId, itemId, variantId, unitId)
                 .ifPresent(si -> {
                     si.setLastPurchaseCost(nvlMoney(costPrice));
                     si.setUpdatedAt(LocalDateTime.now());
@@ -1333,7 +1367,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 throw new RuntimeException("PO item and unit are required");
             }
 
-            String key = item.getItemId() + "-" + item.getUnitId();
+            String key = poLineKey(item.getItemId(), item.getVariantId(), item.getUnitId());
             BigDecimal qty = nvlQty(item.getOrderedQty());
             BigDecimal unitCost = nvlMoney(item.getUnitCostEst());
             BigDecimal lineTotal = qty.multiply(unitCost);
@@ -1342,6 +1376,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             if (existing == null) {
                 PurchaseOrderItemRequestDto copy = new PurchaseOrderItemRequestDto();
                 copy.setItemId(item.getItemId());
+                copy.setVariantId(item.getVariantId());
                 copy.setUnitId(item.getUnitId());
                 copy.setOrderedQty(qty);
                 copy.setUnitCostEst(unitCost);
@@ -1415,6 +1450,8 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
         for (SupplyProductRequestDto p : products) {
             String key = p.getItemId()
+                    + "-"
+                    + (p.getVariantId() != null ? p.getVariantId() : 0L)
                     + "-"
                     + p.getUnitId()
                     + "-"
@@ -1666,7 +1703,9 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
 
     for (PurchaseReturnItemRequestDto itemDto : dto.getItems()) {
 
-        validateItemAndUnit(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId());
+        Long variantId = resolveBatchVariantId(dto.getBranchId(), itemDto.getItemId(), itemDto.getVariantId(), itemDto.getInternalBatchBarcode());
+        itemDto.setVariantId(variantId);
+        validateItemUnitAndVariant(dto.getBranchId(), itemDto.getItemId(), itemDto.getUnitId(), variantId);
 
         BigDecimal qty = nvlQty(itemDto.getQuantity());
         BigDecimal unitCost = nvlMoney(itemDto.getUnitCost());
@@ -1681,6 +1720,7 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
         PurchaseReturnItem returnItem = new PurchaseReturnItem();
         returnItem.setPurchaseReturnId(savedReturn.getPurchaseReturnId());
         returnItem.setItemId(itemDto.getItemId());
+        returnItem.setVariantId(itemDto.getVariantId());
         returnItem.setUnitId(itemDto.getUnitId());
         returnItem.setInternalBatchBarcode(itemDto.getInternalBatchBarcode());
         returnItem.setReturnStockType(returnStockType);
@@ -1832,24 +1872,25 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
             nvlQty(itemDto.getQuantity())
     );
 
-    Stock stock = stockRepository.findByBranchIdAndItemId(dto.getBranchId(), itemDto.getItemId())
+    Long variantId = resolveBatchVariantId(dto.getBranchId(), itemDto.getItemId(), itemDto.getVariantId(), itemDto.getInternalBatchBarcode());
+    Stock stock = stockRepository.findByBranchIdAndItemIdAndVariantId(dto.getBranchId(), itemDto.getItemId(), variantId)
             .orElseThrow(() -> new RuntimeException("Stock not found"));
 
     switch (type) {
         case "DAMAGED" -> {
-            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.DAMAGED).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), variantId, StockQtyType.DAMAGED).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough damaged stock to return");
             }
         }
 
         case "EXPIRED" -> {
-            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.EXPIRED).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), variantId, StockQtyType.EXPIRED).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough expired stock to return");
             }
         }
 
         default -> {
-            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), StockQtyType.AVAILABLE).compareTo(qtyBase) < 0) {
+            if (getBatchQtyTotal(dto.getBranchId(), itemDto.getItemId(), variantId, StockQtyType.AVAILABLE).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Not enough available stock to return");
             }
         }
@@ -1862,6 +1903,10 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
         StockBatch batch = stockBatchRepository
                 .findByBranchIdAndInternalBatchBarcode(dto.getBranchId(), itemDto.getInternalBatchBarcode())
                 .orElseThrow(() -> new RuntimeException("Stock batch not found"));
+
+        if (!java.util.Objects.equals(batch.getVariantId(), variantId)) {
+            throw new RuntimeException("Batch does not belong to selected variant");
+        }
 
         BigDecimal batchQty = switch (type) {
             case "DAMAGED" -> nvlQty(batch.getDamagedQty());
@@ -1883,13 +1928,14 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
         }
         stockBatchRepository.save(batch);
     } else {
-        deductBatchQtyFifo(dto.getBranchId(), itemDto.getItemId(), qtyBase, type);
+        deductBatchQtyFifo(dto.getBranchId(), itemDto.getItemId(), variantId, qtyBase, type);
     }
 
     StockMovement movement = new StockMovement();
     movement.setBranchId(dto.getBranchId());
     movement.setMovementType("PURCHASE_RETURN_OUT");
     movement.setItemId(itemDto.getItemId());
+    movement.setVariantId(variantId);
     movement.setUnitId(itemDto.getUnitId());
     movement.setInternalBatchBarcode(itemDto.getInternalBatchBarcode());
     movement.setQuantity(qtyBase);
@@ -1938,6 +1984,9 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .supplierId(supplierItem.getSupplierId())
                 .supplierName(supplier != null ? supplier.getName() : null)
                 .itemId(supplierItem.getItemId())
+                .variantId(supplierItem.getVariantId())
+                .variantSku(resolveVariantSku(supplierItem.getVariantId()))
+                .variantLabel(resolveVariantLabel(supplierItem.getVariantId()))
                 .itemName(item != null ? item.getName() : null)
                 .sku(item != null ? item.getSku() : null)
                 .unitId(supplierItem.getUnitId())
@@ -1981,8 +2030,8 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
         return value != null ? value : BigDecimal.ZERO;
     }
 
-    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, StockQtyType type) {
-        return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId)
+    private BigDecimal getBatchQtyTotal(Long branchId, Long itemId, Long variantId, StockQtyType type) {
+        return stockBatchRepository.findByBranchIdAndItemIdAndVariantId(branchId, itemId, variantId)
                 .stream()
                 .map(batch -> switch (type) {
                     case AVAILABLE -> nvlQty(batch.getAvailableQty() != null ? batch.getAvailableQty() : batch.getQtyRemaining());
@@ -1992,8 +2041,8 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    private void deductBatchQtyFifo(Long branchId, Long itemId, BigDecimal qtyBase, String type) {
-        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(branchId, itemId);
+    private void deductBatchQtyFifo(Long branchId, Long itemId, Long variantId, BigDecimal qtyBase, String type) {
+        List<StockBatch> batches = stockBatchRepository.findByBranchIdAndItemIdAndVariantIdOrderByCreatedAtDesc(branchId, itemId, variantId);
         java.util.Collections.reverse(batches);
 
         BigDecimal remaining = qtyBase;
@@ -2023,6 +2072,38 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
             stockBatchRepository.save(batch);
             remaining = remaining.subtract(deduct);
         }
+    }
+
+    private Long resolveBatchVariantId(Long branchId, Long itemId, Long requestedVariantId, String batchBarcode) {
+        if (batchBarcode == null || batchBarcode.isBlank()) {
+            return requestedVariantId;
+        }
+
+        return stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, batchBarcode)
+                .filter(batch -> itemId.equals(batch.getItemId()))
+                .map(batch -> batch.getVariantId() != null ? batch.getVariantId() : requestedVariantId)
+                .orElse(requestedVariantId);
+    }
+
+    private String resolveVariantSku(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        return itemVariantRepository.findById(variantId)
+                .map(ItemVariant::getSku)
+                .orElse(null);
+    }
+
+    private String resolveVariantLabel(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        String label = itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId)
+                .stream()
+                .map(attribute -> attribute.getAttributeName() + ": " + attribute.getAttributeValue())
+                .reduce((left, right) -> left + " / " + right)
+                .orElse(null);
+        return label != null && !label.isBlank() ? label : resolveVariantSku(variantId);
     }
 
     private enum StockQtyType {
@@ -2094,6 +2175,9 @@ private PurchaseReturnItemResponseDto mapPurchaseReturnItem(PurchaseReturnItem i
             .purchaseReturnItemId(item.getPurchaseReturnItemId())
             .purchaseReturnId(item.getPurchaseReturnId())
             .itemId(item.getItemId())
+            .variantId(item.getVariantId())
+            .variantSku(resolveVariantSku(item.getVariantId()))
+            .variantLabel(resolveVariantLabel(item.getVariantId()))
             .unitId(item.getUnitId())
             .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
             .unitName(resolveUnitName(unit))
