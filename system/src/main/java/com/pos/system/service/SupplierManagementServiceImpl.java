@@ -1500,6 +1500,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         BigDecimal cashSales = calculateCashSales(sessionId, txns);
         BigDecimal expenses = sumCashTransactionsByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumCashTransactionsByType(txns, "WITHDRAWAL");
+        BigDecimal cashRefunds = sumCashTransactionsByTypeAndCashMethod(txns, "REFUND");
         BigDecimal supplierPayments = sumCashTransactionsByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumCashTransactionsByType(txns, "SUPPLIER_REFUND_IN");
 
@@ -1508,6 +1509,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
+                .subtract(cashRefunds)
                 .subtract(supplierPayments)
                 .max(BigDecimal.ZERO);
     }
@@ -1564,6 +1566,13 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     private BigDecimal sumCashTransactionsByType(List<CashSessionTransaction> txns, String type) {
         return txns.stream()
                 .filter(t -> type.equals(t.getType()))
+                .map(t -> nvlMoney(t.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal sumCashTransactionsByTypeAndCashMethod(List<CashSessionTransaction> txns, String type) {
+        return txns.stream()
+                .filter(t -> type.equals(t.getType()) && isCashPayment(t.getPaymentMethod()))
                 .map(t -> nvlMoney(t.getAmount()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
