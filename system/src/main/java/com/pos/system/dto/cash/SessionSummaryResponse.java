@@ -19,6 +19,7 @@ public class SessionSummaryResponse {
     private BigDecimal totalOtherSales;
     private BigDecimal totalExpenses;
     private BigDecimal totalWithdrawals;
+    private BigDecimal totalCashRefunds;
     private BigDecimal totalSupplierPayments;
     private BigDecimal totalSupplierRefunds;
     private BigDecimal expectedCash;

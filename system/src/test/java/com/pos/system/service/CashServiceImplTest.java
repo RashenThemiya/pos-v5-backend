@@ -1,5 +1,7 @@
 package com.pos.system.service;
 
+import com.pos.system.dto.cash.CloseSessionRequest;
+import com.pos.system.dto.cash.SessionResponse;
 import com.pos.system.dto.cash.SessionSummaryResponse;
 import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
@@ -87,6 +89,57 @@ class CashServiceImplTest {
         SessionSummaryResponse summary = cashService.getSessionSummary(10L);
 
         assertThat(summary.getExpectedCash()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    void getSessionSummary_deductsOnlyCashRefundsFromExpectedCash() {
+        CashSession session = openSession("6000.00");
+        CustomerOrder order = completedOrder("400.00");
+        Payment cashPayment = cashPayment("400.00", "400.00");
+        CashSessionTransaction cashRefund = transaction("REFUND", "100.00", "CASH");
+        CashSessionTransaction cardRefund = transaction("REFUND", "75.00", "CARD");
+        CashSessionTransaction withdrawal = transaction("WITHDRAWAL", "1000.00", "CASH");
+
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+        when(transactionRepository.findBySessionIdOrderByCreatedAtDesc(10L))
+                .thenReturn(List.of(cashRefund, cardRefund, withdrawal));
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of(order));
+        when(paymentRepository.findByOrderId(77L)).thenReturn(List.of(cashPayment));
+
+        SessionSummaryResponse summary = cashService.getSessionSummary(10L);
+
+        assertThat(summary.getTotalCashSales()).isEqualByComparingTo("400.00");
+        assertThat(summary.getTotalWithdrawals()).isEqualByComparingTo("1000.00");
+        assertThat(summary.getTotalCashRefunds()).isEqualByComparingTo("100.00");
+        assertThat(summary.getExpectedCash()).isEqualByComparingTo("5300.00");
+    }
+
+    @Test
+    void closeSession_persistsExpectedCashAfterDeductingCashRefunds() {
+        CashSession session = openSession("6000.00");
+        CustomerOrder order = completedOrder("400.00");
+        Payment cashPayment = cashPayment("400.00", "400.00");
+        CashSessionTransaction cashRefund = transaction("REFUND", "100.00", "CASH");
+        CashSessionTransaction withdrawal = transaction("WITHDRAWAL", "1000.00", "CASH");
+
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+        when(transactionRepository.findBySessionIdOrderByCreatedAtDesc(10L))
+                .thenReturn(List.of(cashRefund, withdrawal));
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of(order));
+        when(paymentRepository.findByOrderId(77L)).thenReturn(List.of(cashPayment));
+        when(cashSessionRepository.save(session)).thenReturn(session);
+        when(denominationRepository.findBySessionIdAndType(10L, "OPENING")).thenReturn(List.of());
+        when(denominationRepository.findBySessionIdAndType(10L, "CLOSING")).thenReturn(List.of());
+
+        CloseSessionRequest request = new CloseSessionRequest();
+        request.setClosingCash(new BigDecimal("5300.00"));
+        request.setClosedBy(7L);
+
+        SessionResponse response = cashService.closeSession(10L, request);
+
+        assertThat(response.getExpectedCash()).isEqualByComparingTo("5300.00");
+        assertThat(response.getCashDifference()).isEqualByComparingTo("0.00");
+        assertThat(response.getStatus()).isEqualTo("CLOSED");
     }
 
     private CashSession openSession(String openingCash) {

@@ -157,6 +157,7 @@ public class CashServiceImpl implements CashService {
         BigDecimal otherSales    = sumByTypeNotMethod(txns, "SALE", "CASH", "CARD");
         BigDecimal expenses      = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals   = sumByType(txns, "WITHDRAWAL");
+        BigDecimal cashRefunds   = sumByTypeAndCashMethod(txns, "REFUND");
         BigDecimal supplierPays  = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
 
@@ -165,6 +166,7 @@ public class CashServiceImpl implements CashService {
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
+                .subtract(cashRefunds)
                 .subtract(supplierPays)
                 .max(BigDecimal.ZERO);
 
@@ -176,6 +178,7 @@ public class CashServiceImpl implements CashService {
                 .totalOtherSales(otherSales)
                 .totalExpenses(expenses)
                 .totalWithdrawals(withdrawals)
+                .totalCashRefunds(cashRefunds)
                 .totalSupplierPayments(supplierPays)
                 .totalSupplierRefunds(supplierRefunds)
                 .expectedCash(expected)
@@ -343,6 +346,7 @@ public class CashServiceImpl implements CashService {
         BigDecimal cashIn  = calculateCashSales(sessionId, txns);
         BigDecimal expenses = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumByType(txns, "WITHDRAWAL");
+        BigDecimal cashRefunds = sumByTypeAndCashMethod(txns, "REFUND");
         BigDecimal supplierPayments = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
         return nvl(openingCash)
@@ -350,6 +354,7 @@ public class CashServiceImpl implements CashService {
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
+                .subtract(cashRefunds)
                 .subtract(supplierPayments)
                 .max(BigDecimal.ZERO);
     }
@@ -429,6 +434,13 @@ public class CashServiceImpl implements CashService {
     private BigDecimal sumByTypeAndMethod(List<CashSessionTransaction> txns, String type, String method) {
         return txns.stream()
                 .filter(t -> type.equals(t.getType()) && method.equals(t.getPaymentMethod()))
+                .map(t -> nvl(t.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private BigDecimal sumByTypeAndCashMethod(List<CashSessionTransaction> txns, String type) {
+        return txns.stream()
+                .filter(t -> type.equals(t.getType()) && isCashPayment(t.getPaymentMethod()))
                 .map(t -> nvl(t.getAmount()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
