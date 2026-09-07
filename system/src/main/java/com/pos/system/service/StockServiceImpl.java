@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
@@ -55,6 +56,110 @@ public class StockServiceImpl implements StockService {
         Stock stock = findStock(branchId, itemId, null)
                 .orElseThrow(() -> new RuntimeException("Stock not found"));
         return mapStock(stock);
+    }
+
+    @Override
+    public ItemStockDetailsResponse getItemStockDetails(Long branchId, Long itemId) {
+        Item item = itemRepository.findById(itemId)
+                .filter(value -> value.getBranchId().equals(branchId))
+                .orElseThrow(() -> new RuntimeException("Item not found in branch"));
+
+        List<ItemUnit> units = itemUnitRepository.findByItemId(itemId);
+        ItemUnit baseUnit = units.stream().filter(unit -> Boolean.TRUE.equals(unit.getIsBaseUnit()))
+                .findFirst().orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemId));
+        List<ItemVariant> itemVariants = itemVariantRepository.findByItemIdOrderByVariantIdAsc(itemId);
+
+        List<ItemStockDetailsResponse.VariantStockDto> variants;
+        if (itemVariants.isEmpty()) {
+            variants = List.of(buildVariantStockDetails(item, null, units));
+        } else {
+            variants = itemVariants.stream()
+                    .map(variant -> buildVariantStockDetails(item, variant, units))
+                    .toList();
+        }
+
+        return ItemStockDetailsResponse.builder()
+                .itemId(itemId)
+                .branchId(branchId)
+                .baseUnit(ItemStockDetailsResponse.BaseUnitDto.builder()
+                        .unitId(baseUnit.getUnitId())
+                        .unitName(resolveUnitName(baseUnit))
+                        .multiplierToBase(baseUnit.getMultiplierToBase())
+                        .build())
+                .supportsReservedStock(false)
+                .variants(variants)
+                .build();
+    }
+
+    private ItemStockDetailsResponse.VariantStockDto buildVariantStockDetails(
+            Item item, ItemVariant variant, List<ItemUnit> units) {
+        Long variantId = variant != null ? variant.getVariantId() : null;
+        List<StockBatch> batches = findBatches(item.getBranchId(), item.getItemId(), variantId);
+        BigDecimal available = sumBatchQty(batches, StockBatch::getAvailableQty);
+        BigDecimal damaged = sumBatchQty(batches, StockBatch::getDamagedQty);
+        BigDecimal expired = sumBatchQty(batches, StockBatch::getExpiredQty);
+        BigDecimal total = available.add(damaged).add(expired);
+
+        List<ItemStockDetailsResponse.AttributeDto> attributes = variant == null ? List.of()
+                : itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId).stream()
+                .map(attribute -> ItemStockDetailsResponse.AttributeDto.builder()
+                        .name(attribute.getAttributeName()).value(attribute.getAttributeValue()).build())
+                .toList();
+
+        return ItemStockDetailsResponse.VariantStockDto.builder()
+                .variantId(variantId)
+                .variantName(variant != null && "variant=standard".equals(variant.getCombinationSignature())
+                        ? "Standard Item"
+                        : (variant != null ? resolveVariantLabel(variantId) : item.getName()))
+                .sku(variant != null
+                        ? (variant.getSku() != null ? variant.getSku() : variant.getVariantSku())
+                        : item.getSku())
+                .imageUrl(variant != null && variant.getImage() != null ? variant.getImage() : item.getImage())
+                .isActive(variant != null ? variant.getIsActive() : item.getIsActive())
+                .attributes(attributes)
+                .stock(ItemStockDetailsResponse.StockTotalsDto.builder()
+                        .totalBaseQty(total).availableBaseQty(available).reservedBaseQty(null)
+                        .damagedBaseQty(damaged).expiredBaseQty(expired).build())
+                .unitStocks(units.stream().map(unit -> ItemStockDetailsResponse.UnitStockDto.builder()
+                        .unitId(unit.getUnitId()).unitName(resolveUnitName(unit))
+                        .multiplierToBase(unit.getMultiplierToBase()).isBaseUnit(unit.getIsBaseUnit())
+                        .totalBaseQty(total).availableBaseQty(available).build()).toList())
+                .batches(batches.stream().map(this::mapDetailsBatch)
+                        .filter(batch -> "ACTIVE".equals(batch.getStatus()) || "NEAR_EXPIRY".equals(batch.getStatus()))
+                        .toList())
+                .build();
+    }
+
+    private BigDecimal sumBatchQty(List<StockBatch> batches,
+                                   java.util.function.Function<StockBatch, BigDecimal> getter) {
+        return batches.stream().map(getter).map(this::nvlQty).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private ItemStockDetailsResponse.BatchDto mapDetailsBatch(StockBatch batch) {
+        ItemUnit receivedUnit = itemUnitRepository.findById(batch.getUnitId()).orElse(null);
+        return ItemStockDetailsResponse.BatchDto.builder()
+                .stockBatchId(batch.getStockBatchId()).variantId(batch.getVariantId())
+                .batchNo(batch.getBatchNo()).internalBatchBarcode(batch.getInternalBatchBarcode())
+                .supplierBatchBarcode(batch.getSupplierBatchBarcode())
+                .receivedDate(batch.getCreatedAt() != null ? batch.getCreatedAt().toLocalDate() : null)
+                .expiryDate(batch.getExpiryDate()).receivedUnitId(batch.getUnitId())
+                .receivedUnitName(receivedUnit != null ? resolveUnitName(receivedUnit) : null)
+                .receivedUnitMultiplier(receivedUnit != null ? receivedUnit.getMultiplierToBase() : null)
+                .originalReceivedQty(batch.getReceivedQty()).originalBaseQty(batch.getReceivedBaseQty())
+                .availableBaseQty(nvlQty(batch.getAvailableQty())).reservedBaseQty(null)
+                .damagedBaseQty(nvlQty(batch.getDamagedQty())).expiredBaseQty(nvlQty(batch.getExpiredQty()))
+                .status(resolveBatchStatus(batch)).build();
+    }
+
+    private String resolveBatchStatus(StockBatch batch) {
+        BigDecimal currentQty = nvlQty(batch.getAvailableQty())
+                .add(nvlQty(batch.getDamagedQty())).add(nvlQty(batch.getExpiredQty()));
+        if (currentQty.compareTo(BigDecimal.ZERO) <= 0) return "DEPLETED";
+        if (batch.getExpiryDate() == null) return "ACTIVE";
+        LocalDate today = LocalDate.now();
+        if (batch.getExpiryDate().isBefore(today)) return "EXPIRED";
+        if (!batch.getExpiryDate().isAfter(today.plusDays(30))) return "NEAR_EXPIRY";
+        return "ACTIVE";
     }
 
     @Override

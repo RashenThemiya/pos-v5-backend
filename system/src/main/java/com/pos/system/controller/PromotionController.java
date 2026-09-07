@@ -45,6 +45,13 @@ public class PromotionController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW')")
+    @GetMapping("/branch/{branchId}/item/{itemId}")
+    public ResponseEntity<List<PromotionResponse>> getPromotionsByItem(
+            @PathVariable Long branchId, @PathVariable Long itemId) {
+        return ResponseEntity.ok(promotionService.getPromotionsByItem(branchId, itemId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW')")
     @GetMapping("/branch/{branchId}/active")
     public ResponseEntity<List<PromotionResponse>> getActivePromotionsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(promotionService.getActivePromotionsByBranch(branchId));

@@ -32,6 +32,14 @@ public class FileStorageService {
     );
 
     public String uploadItemImage(MultipartFile file) {
+        return uploadImage(file, "item_images");
+    }
+
+    public String uploadVariantImage(MultipartFile file) {
+        return uploadImage(file, "variant_images");
+    }
+
+    private String uploadImage(MultipartFile file, String folder) {
         if (file == null || file.isEmpty()) {
             return null;
         }
@@ -40,7 +48,7 @@ public class FileStorageService {
 
         String originalName = file.getOriginalFilename() != null ? file.getOriginalFilename() : "image";
         String sanitizedName = sanitizeFileName(originalName);
-        String key = "item_images/" + UUID.randomUUID() + "_" + sanitizedName;
+        String key = folder + "/" + UUID.randomUUID() + "_" + sanitizedName;
 
         try {
             PutObjectRequest putObjectRequest = PutObjectRequest.builder()

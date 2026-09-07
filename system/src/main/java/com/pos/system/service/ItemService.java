@@ -68,6 +68,7 @@ public class ItemService {
     private final BrandCategoryRepository brandCategoryRepository;
 
     private final FileStorageService fileStorageService;
+    private final ItemAuditService itemAuditService;
     private final ObjectMapper objectMapper;
 
     @Transactional
@@ -90,9 +91,15 @@ public class ItemService {
         ItemUnit baseUnit = createOrUpdateBaseUnit(item, buildBaseUnitRequest(request), request.getAutoGenerateBarcode());
         syncScaleMapping(item, baseUnit, request.getScaleItemCode());
         List<ItemVariantRequest> variantRequests = resolveVariantRequests(request);
-        if (variantRequests != null) {
+        if (!Boolean.TRUE.equals(item.getIsWeighed())) {
+            if (variantRequests == null || variantRequests.isEmpty()) {
+                variantRequests = List.of(buildStandardVariantRequest(item));
+            }
             syncVariants(item, variantRequests);
         }
+
+        itemAuditService.record(item.getBranchId(), item.getItemId(), "CREATE", "ITEM",
+                item.getItemId(), "Item created");
 
         return toResponse(item);
     }
@@ -199,6 +206,9 @@ public class ItemService {
             syncVariants(item, variantRequests);
         }
 
+        itemAuditService.record(item.getBranchId(), item.getItemId(), "UPDATE", "ITEM",
+                item.getItemId(), "Item configuration updated");
+
         return toResponse(item);
     }
 
@@ -207,12 +217,18 @@ public class ItemService {
         Item item = findById(id);
         item.setIsActive(!item.getIsActive());
         item.setUpdatedAt(LocalDateTime.now());
-        return toResponse(itemRepository.save(item));
+        Item saved = itemRepository.save(item);
+        itemAuditService.record(saved.getBranchId(), saved.getItemId(), "TOGGLE_ACTIVE", "ITEM",
+                saved.getItemId(), "Active=" + saved.getIsActive());
+        return toResponse(saved);
     }
 
     @Transactional
     public void delete(Long id) {
         Item item = findById(id);
+
+        itemAuditService.record(item.getBranchId(), item.getItemId(), "DELETE", "ITEM",
+                item.getItemId(), "Item deleted");
 
         deleteVariantsByItem(item.getItemId());
 
@@ -265,7 +281,10 @@ public class ItemService {
         unit.setCreatedAt(LocalDateTime.now());
         unit.setUpdatedAt(LocalDateTime.now());
 
-        return toUnitResponse(itemUnitRepository.save(unit));
+        ItemUnit saved = itemUnitRepository.save(unit);
+        itemAuditService.record(item.getBranchId(), itemId, "CREATE", "UNIT", saved.getUnitId(),
+                "Unit added: " + saved.getUnitName());
+        return toUnitResponse(saved);
     }
 
     @Transactional
@@ -313,12 +332,15 @@ public class ItemService {
         unit.setBarcode(Boolean.TRUE.equals(item.getIsWeighed()) ? null : incomingBarcode);
         unit.setUpdatedAt(LocalDateTime.now());
 
-        return toUnitResponse(itemUnitRepository.save(unit));
+        ItemUnit saved = itemUnitRepository.save(unit);
+        itemAuditService.record(item.getBranchId(), itemId, "UPDATE", "UNIT", saved.getUnitId(),
+                "Unit updated: " + saved.getUnitName());
+        return toUnitResponse(saved);
     }
 
     @Transactional
     public void deleteUnit(Long itemId, Long unitId) {
-        findById(itemId);
+        Item item = findById(itemId);
 
         ItemUnit unit = itemUnitRepository.findById(unitId)
                 .orElseThrow(() -> new RuntimeException("Item unit not found with id: " + unitId));
@@ -332,6 +354,8 @@ public class ItemService {
         }
 
         itemUnitRepository.delete(unit);
+        itemAuditService.record(item.getBranchId(), itemId, "DELETE", "UNIT", unitId,
+                "Unit deleted: " + unit.getUnitName());
     }
 
     public List<ItemVariantResponse> getVariantsByItem(Long itemId) {
@@ -347,7 +371,10 @@ public class ItemService {
         Item item = findById(itemId);
         request.setVariantId(null);
         validateVariantBatch(item, List.of(request), null);
-        return toVariantResponse(saveVariant(item, new ItemVariant(), request));
+        ItemVariant saved = saveVariant(item, new ItemVariant(), request);
+        itemAuditService.record(item.getBranchId(), itemId, "CREATE", "VARIANT", saved.getVariantId(),
+                "Variant added: " + describeAttributes(request.getAttributes()));
+        return toVariantResponse(saved);
     }
 
     @Transactional
@@ -358,29 +385,37 @@ public class ItemService {
 
         request.setVariantId(variantId);
         validateVariantBatch(item, List.of(request), variantId);
-        return toVariantResponse(saveVariant(item, variant, request));
+        ItemVariant saved = saveVariant(item, variant, request);
+        itemAuditService.record(item.getBranchId(), itemId, "UPDATE", "VARIANT", saved.getVariantId(),
+                "Variant updated: " + describeAttributes(request.getAttributes()));
+        return toVariantResponse(saved);
     }
 
     @Transactional
     public void deleteVariant(Long itemId, Long variantId) {
-        findById(itemId);
+        Item item = findById(itemId);
         ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
                 .orElseThrow(() -> new RuntimeException("Item variant not found with id: " + variantId));
 
         validateVariantCanBeDeleted(variant);
         itemVariantAttributeRepository.deleteByVariantId(variant.getVariantId());
         itemVariantRepository.delete(variant);
+        itemAuditService.record(item.getBranchId(), itemId, "DELETE", "VARIANT", variantId,
+                "Variant deleted");
     }
 
     @Transactional
     public ItemVariantResponse toggleVariantActive(Long itemId, Long variantId) {
-        findById(itemId);
+        Item item = findById(itemId);
         ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
                 .orElseThrow(() -> new RuntimeException("Item variant not found with id: " + variantId));
 
         variant.setIsActive(!variant.getIsActive());
         variant.setUpdatedAt(LocalDateTime.now());
-        return toVariantResponse(itemVariantRepository.save(variant));
+        ItemVariant saved = itemVariantRepository.save(variant);
+        itemAuditService.record(item.getBranchId(), itemId, "TOGGLE_ACTIVE", "VARIANT", variantId,
+                "Active=" + saved.getIsActive());
+        return toVariantResponse(saved);
     }
 
     private void validateBranch(Long branchId) {
@@ -825,6 +860,20 @@ public class ItemService {
         }
     }
 
+    private ItemVariantRequest buildStandardVariantRequest(Item item) {
+        ItemVariantAttributeRequest attribute = new ItemVariantAttributeRequest();
+        attribute.setAttributeName("Variant");
+        attribute.setAttributeValue("Standard");
+
+        ItemVariantRequest variant = new ItemVariantRequest();
+        variant.setSku(null);
+        variant.setDefaultSellingPrice(null);
+        variant.setImage(item.getImage());
+        variant.setIsActive(true);
+        variant.setAttributes(List.of(attribute));
+        return variant;
+    }
+
     private void syncVariants(Item item, List<ItemVariantRequest> requests) {
         validateVariantBatch(item, requests, null);
 
@@ -958,6 +1007,12 @@ public class ItemService {
         variant.setSku(normalizedSku);
         variant.setVariantSku(normalizedSku != null ? normalizedSku : buildInternalVariantSku(item, combinationSignature));
         variant.setDefaultSellingPrice(request.getDefaultSellingPrice());
+        if (creating || request.getImage() != null) {
+            variant.setImage(StringUtils.hasText(request.getImage()) ? request.getImage().trim() : null);
+        }
+        if (request.getImageFile() != null && !request.getImageFile().isEmpty()) {
+            variant.setImage(fileStorageService.uploadVariantImage(request.getImageFile()));
+        }
         variant.setCombinationSignature(combinationSignature);
         variant.setIsActive(request.getIsActive() != null ? request.getIsActive() : true);
         if (creating) {
@@ -1091,6 +1146,7 @@ public class ItemService {
         response.setBranchId(variant.getBranchId());
         response.setSku(variant.getSku());
         response.setDefaultSellingPrice(variant.getDefaultSellingPrice());
+        response.setImage(variant.getImage());
         response.setIsActive(variant.getIsActive());
         response.setCreatedAt(variant.getCreatedAt());
         response.setUpdatedAt(variant.getUpdatedAt());

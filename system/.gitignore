@@ -4,7 +4,7 @@ target/
 !**/src/main/**/target/
 !**/src/test/**/target/
 Readme.txt
-Dockerfile
+!Dockerfile
 docker-compose.yml
 
 ### STS ###

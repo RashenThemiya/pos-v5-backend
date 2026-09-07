@@ -365,6 +365,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .toList();
     }
 
+    @Override
+    public List<PurchaseOrderResponseDto> getPurchaseOrdersByItem(Long branchId, Long itemId) {
+        return purchaseOrderRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream().map(po -> getPurchaseOrderById(po.getPoId())).toList();
+    }
+
     // =========================
     // SUPPLY / GRN
     // =========================
@@ -684,6 +690,12 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .stream()
                 .map(s -> getSupplyById(s.getSupplyId()))
                 .toList();
+    }
+
+    @Override
+    public List<SupplyResponseDto> getSuppliesByItem(Long branchId, Long itemId) {
+        return supplyRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream().map(s -> getSupplyById(s.getSupplyId())).toList();
     }
 
     @Override

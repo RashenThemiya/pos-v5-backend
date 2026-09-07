@@ -32,6 +32,11 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
 
     List<CustomerOrder> findByBranchIdAndStatusOrderByOrderDateDesc(Long branchId, String status);
 
+    @Query("SELECT DISTINCT o FROM CustomerOrder o JOIN OrderProduct op ON op.orderId = o.orderId " +
+           "WHERE o.branchId = :branchId AND op.itemId = :itemId ORDER BY o.orderDate DESC")
+    List<CustomerOrder> findByBranchIdAndItemId(@Param("branchId") Long branchId,
+                                                @Param("itemId") Long itemId);
+
     // ── Dashboard aggregate queries ───────────────────────────────────────
 
     /** Count orders by branch and status within a date range. */

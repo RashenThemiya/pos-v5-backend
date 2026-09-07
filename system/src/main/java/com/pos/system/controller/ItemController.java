@@ -158,19 +158,36 @@ public class ItemController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_CREATE')")
-    @PostMapping("/{itemId}/variants")
+    @PostMapping(value = "/{itemId}/variants", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiResponse<ItemVariantResponse>> addVariant(
             @PathVariable Long itemId,
             @Valid @RequestBody ItemVariantRequest request) {
         return ResponseEntity.ok(ApiResponse.success("Item variant created successfully", itemService.addVariant(itemId, request)));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_CREATE')")
+    @PostMapping(value = "/{itemId}/variants", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<ItemVariantResponse>> addVariantWithImage(
+            @PathVariable Long itemId,
+            @Valid @ModelAttribute ItemVariantRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Item variant created successfully", itemService.addVariant(itemId, request)));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_UPDATE')")
-    @PutMapping("/{itemId}/variants/{variantId}")
+    @PutMapping(value = "/{itemId}/variants/{variantId}", consumes = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<ApiResponse<ItemVariantResponse>> updateVariant(
             @PathVariable Long itemId,
             @PathVariable Long variantId,
             @Valid @RequestBody ItemVariantRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Item variant updated successfully", itemService.updateVariant(itemId, variantId, request)));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('ITEM_UPDATE')")
+    @PutMapping(value = "/{itemId}/variants/{variantId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<ApiResponse<ItemVariantResponse>> updateVariantWithImage(
+            @PathVariable Long itemId,
+            @PathVariable Long variantId,
+            @Valid @ModelAttribute ItemVariantRequest request) {
         return ResponseEntity.ok(ApiResponse.success("Item variant updated successfully", itemService.updateVariant(itemId, variantId, request)));
     }
 

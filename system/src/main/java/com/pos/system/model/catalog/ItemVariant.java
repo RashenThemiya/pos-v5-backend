@@ -39,6 +39,9 @@ public class ItemVariant {
     @Column(precision = 10, scale = 2)
     private BigDecimal defaultSellingPrice;
 
+    @Column(length = 1000)
+    private String image;
+
     @Column(name = "combination_signature", nullable = false, length = 512)
     private String combinationSignature;
 

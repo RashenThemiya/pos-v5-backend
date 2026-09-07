@@ -30,6 +30,13 @@ public class StockController {
         return ResponseEntity.ok(stockService.getStockByBranchAndItem(branchId, itemId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW')")
+    @GetMapping("/branch/{branchId}/item/{itemId}/details")
+    public ResponseEntity<ItemStockDetailsResponse> getItemStockDetails(
+            @PathVariable Long branchId, @PathVariable Long itemId) {
+        return ResponseEntity.ok(stockService.getItemStockDetails(branchId, itemId));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_BATCH_VIEW')")
     @GetMapping("/batches/branch/{branchId}")
     public ResponseEntity<List<StockBatchResponseDto>> getStockBatchesByBranch(@PathVariable Long branchId) {

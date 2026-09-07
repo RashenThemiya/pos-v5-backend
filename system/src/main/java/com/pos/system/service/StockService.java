@@ -8,6 +8,7 @@ public interface StockService {
 
     List<StockResponseDto> getStockByBranch(Long branchId);
     StockResponseDto getStockByBranchAndItem(Long branchId, Long itemId);
+    ItemStockDetailsResponse getItemStockDetails(Long branchId, Long itemId);
 
     List<StockBatchResponseDto> getStockBatchesByBranch(Long branchId);
     List<StockBatchResponseDto> getStockBatchesByBranchAndItem(Long branchId, Long itemId);

@@ -62,6 +62,13 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getPurchaseOrdersByBranch(branchId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW')")
+    @GetMapping("/purchase-orders/branch/{branchId}/item/{itemId}")
+    public ResponseEntity<List<PurchaseOrderResponseDto>> getPurchaseOrdersByItem(
+            @PathVariable Long branchId, @PathVariable Long itemId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseOrdersByItem(branchId, itemId));
+    }
+
     // SUPPLY / GRN
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_CREATE')")
@@ -80,6 +87,13 @@ public class SupplierManagementController {
     @GetMapping("/supplies/branch/{branchId}")
     public ResponseEntity<List<SupplyResponseDto>> getSuppliesByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(supplierManagementService.getSuppliesByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
+    @GetMapping("/supplies/branch/{branchId}/item/{itemId}")
+    public ResponseEntity<List<SupplyResponseDto>> getSuppliesByItem(
+            @PathVariable Long branchId, @PathVariable Long itemId) {
+        return ResponseEntity.ok(supplierManagementService.getSuppliesByItem(branchId, itemId));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")

@@ -174,6 +174,12 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
+    public List<OrderResponse> getOrdersByItem(Long branchId, Long itemId) {
+        return orderRepository.findByBranchIdAndItemId(branchId, itemId)
+                .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
     public List<OrderResponse> getOrdersBySession(Long branchId, Long sessionId) {
         return orderRepository.findByBranchIdAndCashSessionIdOrderByOrderDateDesc(branchId, sessionId)
                 .stream().map(this::buildOrderResponse).toList();

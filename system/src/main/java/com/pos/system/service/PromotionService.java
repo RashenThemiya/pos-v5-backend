@@ -11,6 +11,7 @@ public interface PromotionService {
     PromotionResponse updatePromotion(Long promotionId, PromotionRequest request);
     PromotionResponse getPromotionById(Long promotionId);
     List<PromotionResponse> getPromotionsByBranch(Long branchId);
+    List<PromotionResponse> getPromotionsByItem(Long branchId, Long itemId);
     List<PromotionResponse> getActivePromotionsByBranch(Long branchId);
     void togglePromotion(Long promotionId, boolean isActive);
 

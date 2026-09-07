@@ -13,6 +13,7 @@ public class ItemVariantResponse {
     private Long branchId;
     private String sku;
     private BigDecimal defaultSellingPrice;
+    private String image;
     private Boolean isActive;
     private List<ItemVariantAttributeResponse> attributes;
     private LocalDateTime createdAt;

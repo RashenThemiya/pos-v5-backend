@@ -42,6 +42,8 @@ public interface SupplierManagementService {
 
     List<PurchaseOrderResponseDto> getPurchaseOrdersByBranch(Long branchId);
 
+    List<PurchaseOrderResponseDto> getPurchaseOrdersByItem(Long branchId, Long itemId);
+
     // =========================
     // SUPPLY / GRN
     // =========================
@@ -51,6 +53,8 @@ public interface SupplierManagementService {
     SupplyResponseDto getSupplyById(Long supplyId);
 
     List<SupplyResponseDto> getSuppliesByBranch(Long branchId);
+
+    List<SupplyResponseDto> getSuppliesByItem(Long branchId, Long itemId);
 
     List<SupplyResponseDto> getUnpaidSuppliesByBranch(Long branchId);
 
