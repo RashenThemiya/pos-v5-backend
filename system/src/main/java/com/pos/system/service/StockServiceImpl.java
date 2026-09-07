@@ -41,6 +41,7 @@ public class StockServiceImpl implements StockService {
     private final UnitMasterRepository unitMasterRepository;
     private final CategoryRepository categoryRepository;
     private final BrandRepository brandRepository;
+    private final UserRepository userRepository;
     private final UnitConversionService unitConversionService;
 
     @Override
@@ -890,8 +891,20 @@ public class StockServiceImpl implements StockService {
                 .refId(movement.getRefId())
                 .note(movement.getNote())
                 .createdBy(movement.getCreatedBy())
+                .createdByName(resolveUserName(movement.getCreatedBy()))
                 .createdAt(movement.getCreatedAt())
                 .build();
+    }
+
+    private String resolveUserName(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return userRepository.findById(userId)
+                .map(user -> user.getFullName() != null && !user.getFullName().isBlank()
+                        ? user.getFullName()
+                        : "User #" + userId)
+                .orElse("User #" + userId);
     }
 
     private BigDecimal nvlQty(BigDecimal value) {

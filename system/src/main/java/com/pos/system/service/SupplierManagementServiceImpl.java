@@ -60,6 +60,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private final ItemVariantRepository itemVariantRepository;
     private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final UnitMasterRepository unitMasterRepository;
+    private final UserRepository userRepository;
     private final UnitConversionService unitConversionService;
 
     private final CashSessionRepository cashSessionRepository;
@@ -342,10 +343,13 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 .poId(po.getPoId())
                 .branchId(po.getBranchId())
                 .supplierId(po.getSupplierId())
+                .supplierName(supplierRepository.findById(po.getSupplierId())
+                        .map(Supplier::getName).orElse(null))
                 .poNo(po.getPoNo())
                 .status(po.getStatus())
                 .expectedDate(po.getExpectedDate())
                 .createdBy(po.getCreatedBy())
+                .createdByName(resolveUserName(po.getCreatedBy()))
                 .createdAt(po.getCreatedAt())
                 .note(po.getNote())
                 .totalAmount(totalAmount)
@@ -1856,6 +1860,17 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
     // =========================
     // RESOLVE HELPERS
     // =========================
+
+    private String resolveUserName(Long userId) {
+        if (userId == null) {
+            return null;
+        }
+        return userRepository.findById(userId)
+                .map(user -> user.getFullName() != null && !user.getFullName().isBlank()
+                        ? user.getFullName()
+                        : "User #" + userId)
+                .orElse("User #" + userId);
+    }
 
     private Long resolveUserId(Long userId) {
         return userId != null ? userId : SYSTEM_USER_ID;

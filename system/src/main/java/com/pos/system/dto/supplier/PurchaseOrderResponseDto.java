@@ -14,10 +14,12 @@ public class PurchaseOrderResponseDto {
     private Long poId;
     private Long branchId;
     private Long supplierId;
+    private String supplierName;
     private String poNo;
     private String status;
     private LocalDate expectedDate;
     private Long createdBy;
+    private String createdByName;
     private LocalDateTime createdAt;
     private String note;
     private BigDecimal totalAmount;

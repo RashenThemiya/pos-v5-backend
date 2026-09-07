@@ -23,6 +23,8 @@ public class ItemResponse {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private String scaleItemCode;
+    private ItemUnitResponse baseUnit;
+    private ItemStockTotalsResponse stock;
     private List<ItemUnitResponse> units;
     private List<ItemVariantResponse> variants;
     private BigDecimal minStock;

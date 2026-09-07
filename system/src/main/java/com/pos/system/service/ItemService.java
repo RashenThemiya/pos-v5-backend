@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pos.system.dto.item.ItemSearchRequest;
+import com.pos.system.dto.item.ItemStockTotalsResponse;
 import com.pos.system.dto.item.ItemRequest;
 import com.pos.system.dto.item.ItemResponse;
 import com.pos.system.dto.item.ItemUnitRequest;
@@ -19,6 +20,7 @@ import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.ItemVariantAttribute;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.catalog.UnitMaster;
+import com.pos.system.model.stock.StockBatch;
 import com.pos.system.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -702,6 +704,12 @@ public class ItemService {
                 .collect(Collectors.toList());
 
         response.setUnits(units);
+        response.setBaseUnit(units.stream()
+                .filter(unit -> Boolean.TRUE.equals(unit.getIsBaseUnit()))
+                .findFirst()
+                .orElse(null));
+        response.setStock(buildStockTotals(
+                stockBatchRepository.findByBranchIdAndItemId(item.getBranchId(), item.getItemId())));
         response.setVariants(getVariantsByItem(item.getItemId()));
         return response;
     }
@@ -1148,6 +1156,8 @@ public class ItemService {
         response.setDefaultSellingPrice(variant.getDefaultSellingPrice());
         response.setImage(variant.getImage());
         response.setIsActive(variant.getIsActive());
+        response.setStock(buildStockTotals(stockBatchRepository.findByBranchIdAndItemIdAndVariantId(
+                variant.getBranchId(), variant.getItemId(), variant.getVariantId())));
         response.setCreatedAt(variant.getCreatedAt());
         response.setUpdatedAt(variant.getUpdatedAt());
         response.setAttributes(itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variant.getVariantId())
@@ -1155,6 +1165,29 @@ public class ItemService {
                 .map(this::toVariantAttributeResponse)
                 .collect(Collectors.toList()));
         return response;
+    }
+
+    private ItemStockTotalsResponse buildStockTotals(List<StockBatch> batches) {
+        BigDecimal available = sumStockBatchQuantity(batches, StockBatch::getAvailableQty);
+        BigDecimal damaged = sumStockBatchQuantity(batches, StockBatch::getDamagedQty);
+        BigDecimal expired = sumStockBatchQuantity(batches, StockBatch::getExpiredQty);
+
+        ItemStockTotalsResponse stock = new ItemStockTotalsResponse();
+        stock.setAvailableBaseQty(available);
+        stock.setReservedBaseQty(null);
+        stock.setDamagedBaseQty(damaged);
+        stock.setExpiredBaseQty(expired);
+        stock.setTotalBaseQty(available.add(damaged).add(expired));
+        return stock;
+    }
+
+    private BigDecimal sumStockBatchQuantity(
+            List<StockBatch> batches,
+            java.util.function.Function<StockBatch, BigDecimal> quantityGetter) {
+        return batches.stream()
+                .map(quantityGetter)
+                .map(quantity -> quantity != null ? quantity : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private ItemVariantAttributeResponse toVariantAttributeResponse(ItemVariantAttribute attribute) {

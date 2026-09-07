@@ -15,6 +15,7 @@ public class ItemVariantResponse {
     private BigDecimal defaultSellingPrice;
     private String image;
     private Boolean isActive;
+    private ItemStockTotalsResponse stock;
     private List<ItemVariantAttributeResponse> attributes;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

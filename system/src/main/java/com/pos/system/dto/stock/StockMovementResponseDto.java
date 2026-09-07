@@ -25,5 +25,6 @@ public class StockMovementResponseDto {
     private Long refId;
     private String note;
     private Long createdBy;
+    private String createdByName;
     private LocalDateTime createdAt;
 }
