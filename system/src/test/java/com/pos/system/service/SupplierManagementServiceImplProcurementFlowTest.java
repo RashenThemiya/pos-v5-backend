@@ -45,6 +45,7 @@ import com.pos.system.repository.SupplierRepository;
 import com.pos.system.repository.SupplyProductRepository;
 import com.pos.system.repository.SupplyRepository;
 import com.pos.system.repository.UnitMasterRepository;
+import com.pos.system.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -97,6 +98,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private ItemVariantRepository itemVariantRepository;
     @Mock private ItemVariantAttributeRepository itemVariantAttributeRepository;
     @Mock private UnitMasterRepository unitMasterRepository;
+    @Mock private UserRepository userRepository;
     @Mock private UnitConversionService unitConversionService;
     @Mock private CashSessionRepository cashSessionRepository;
     @Mock private CashSessionTransactionRepository cashSessionTransactionRepository;
@@ -135,6 +137,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 itemVariantRepository,
                 itemVariantAttributeRepository,
                 unitMasterRepository,
+                userRepository,
                 unitConversionService,
                 cashSessionRepository,
                 cashSessionTransactionRepository,

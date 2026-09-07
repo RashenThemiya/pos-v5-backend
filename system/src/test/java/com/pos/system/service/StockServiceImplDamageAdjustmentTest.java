@@ -20,6 +20,7 @@ import com.pos.system.repository.StockRepository;
 import com.pos.system.repository.StockTransferItemRepository;
 import com.pos.system.repository.StockTransferRepository;
 import com.pos.system.repository.UnitMasterRepository;
+import com.pos.system.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -64,6 +65,7 @@ class StockServiceImplDamageAdjustmentTest {
     @Mock private UnitMasterRepository unitMasterRepository;
     @Mock private CategoryRepository categoryRepository;
     @Mock private BrandRepository brandRepository;
+    @Mock private UserRepository userRepository;
     @Mock private UnitConversionService unitConversionService;
 
     private StockServiceImpl service;
@@ -87,6 +89,7 @@ class StockServiceImplDamageAdjustmentTest {
                 unitMasterRepository,
                 categoryRepository,
                 brandRepository,
+                userRepository,
                 unitConversionService
         );
 
