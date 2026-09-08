@@ -90,11 +90,23 @@ public class CashServiceImpl implements CashService {
         session.setOpenedBy(request.getOpenedBy());
         session.setOpenedAt(LocalDateTime.now());
         session.setOpeningCash(nvl(request.getOpeningCash()));
+        session.setSessionType(clean(request.getSessionType()));
+        session.setPurpose(clean(request.getPurpose()));
         session.setStatus("OPEN");
 
         CashSession saved = cashSessionRepository.save(session);
 
         saveDenominations(saved.getSessionId(), "OPENING", request.getDenominations());
+        recordTransaction(
+                saved.getSessionId(),
+                "SESSION_OPEN",
+                saved.getOpeningCash(),
+                "CASH",
+                null, null,
+                null, null,
+                saved.getPurpose() != null ? saved.getPurpose() : "Cash session opened",
+                saved.getOpenedBy()
+        );
 
         return buildSessionResponse(saved);
     }
@@ -121,6 +133,17 @@ public class CashServiceImpl implements CashService {
         CashSession saved = cashSessionRepository.save(session);
 
         saveDenominations(saved.getSessionId(), "CLOSING", request.getDenominations());
+        String closeNote = clean(request.getNote());
+        recordTransaction(
+                saved.getSessionId(),
+                "SESSION_CLOSE",
+                closingCash,
+                "CASH",
+                null, null,
+                null, null,
+                closeNote != null ? closeNote : "Cash session closed",
+                request.getClosedBy()
+        );
 
         return buildSessionResponse(saved);
     }
@@ -159,7 +182,7 @@ public class CashServiceImpl implements CashService {
         BigDecimal withdrawals   = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds   = sumByTypeAndCashMethod(txns, "REFUND");
         BigDecimal supplierPays  = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
-        BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
+        BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
 
         BigDecimal expected = nvl(session.getOpeningCash())
                 .add(cashSales)
@@ -323,7 +346,7 @@ public class CashServiceImpl implements CashService {
         txn.setExpenseId(expenseId);
         txn.setWithdrawalId(withdrawalId);
         txn.setNote(note);
-        txn.setCreatedBy(createdBy);
+        txn.setCreatedBy(createdBy != null ? createdBy : 1L);
         txn.setCreatedAt(LocalDateTime.now());
         transactionRepository.save(txn);
     }
@@ -348,7 +371,7 @@ public class CashServiceImpl implements CashService {
         BigDecimal withdrawals = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds = sumByTypeAndCashMethod(txns, "REFUND");
         BigDecimal supplierPayments = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
-        BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
+        BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
         return nvl(openingCash)
                 .add(cashIn)
                 .add(supplierRefunds)
@@ -473,6 +496,8 @@ public class CashServiceImpl implements CashService {
                 .closingCash(session.getClosingCash())
                 .expectedCash(session.getExpectedCash())
                 .cashDifference(session.getCashDifference())
+                .sessionType(session.getSessionType())
+                .purpose(session.getPurpose())
                 .status(session.getStatus())
                 .openingDenominations(opening)
                 .closingDenominations(closing)
@@ -491,6 +516,13 @@ public class CashServiceImpl implements CashService {
 
     private BigDecimal nvl(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private String clean(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
     }
 
     // ─── Mappers ─────────────────────────────────────────────────────────────────
@@ -525,6 +557,10 @@ public class CashServiceImpl implements CashService {
                 .paymentId(t.getPaymentId())
                 .supplierPaymentId(t.getSupplierPaymentId())
                 .purchaseReturnId(t.getPurchaseReturnId())
+                .supplierId(t.getSupplierId())
+                .supplyId(t.getSupplyId())
+                .counterId(t.getCounterId())
+                .referenceNo(t.getReferenceNo())
                 .expenseId(t.getExpenseId())
                 .withdrawalId(t.getWithdrawalId())
                 .orderId(t.getOrderId())

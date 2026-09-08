@@ -28,6 +28,10 @@ public class CashSessionTransaction {
     private Long paymentId;
     private Long supplierPaymentId;
     private Long purchaseReturnId;
+    private Long supplierId;
+    private Long supplyId;
+    private Long counterId;
+    private String referenceNo;
     private Long expenseId;
     private Long withdrawalId;
     private Long orderId;
