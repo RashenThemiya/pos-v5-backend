@@ -11,6 +11,8 @@ public class PurchaseOrderItemResponseDto {
     private Long poItemId;
     private Long poId;
     private Long itemId;
+    private String itemName;
+    private String sku;
     private Long variantId;
     private String variantSku;
     private String variantLabel;
