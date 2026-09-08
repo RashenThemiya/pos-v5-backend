@@ -25,6 +25,7 @@ import com.pos.system.model.supplier.Supply;
 import com.pos.system.model.supplier.SupplyProduct;
 import com.pos.system.repository.CashSessionRepository;
 import com.pos.system.repository.CashSessionTransactionRepository;
+import com.pos.system.repository.CounterRepository;
 import com.pos.system.repository.CustomerOrderRepository;
 import com.pos.system.repository.ItemRepository;
 import com.pos.system.repository.ItemUnitRepository;
@@ -102,6 +103,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private UnitConversionService unitConversionService;
     @Mock private CashSessionRepository cashSessionRepository;
     @Mock private CashSessionTransactionRepository cashSessionTransactionRepository;
+    @Mock private CounterRepository counterRepository;
     @Mock private CustomerOrderRepository orderRepository;
     @Mock private PaymentRepository paymentRepository;
     @Mock private PurchaseReturnRepository purchaseReturnRepository;
@@ -141,6 +143,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 unitConversionService,
                 cashSessionRepository,
                 cashSessionTransactionRepository,
+                counterRepository,
                 orderRepository,
                 paymentRepository,
                 purchaseReturnRepository,
