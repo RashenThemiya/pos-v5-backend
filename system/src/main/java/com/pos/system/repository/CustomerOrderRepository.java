@@ -1,6 +1,8 @@
 package com.pos.system.repository;
 
 import com.pos.system.model.sale.CustomerOrder;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -28,6 +30,8 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
     List<CustomerOrder> findByCashSessionIdOrderByOrderDateDesc(Long cashSessionId);
 
     List<CustomerOrder> findByBranchIdAndCustomerIdOrderByOrderDateDesc(Long branchId, Long customerId);
+
+    Page<CustomerOrder> findByBranchIdAndCustomerId(Long branchId, Long customerId, Pageable pageable);
 
     List<CustomerOrder> findByBranchIdAndOrderDateBetweenOrderByOrderDateDesc(
             Long branchId, LocalDateTime from, LocalDateTime to);

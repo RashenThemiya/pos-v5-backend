@@ -18,6 +18,8 @@ import com.pos.system.model.stock.StockMovement;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -175,9 +177,17 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
-    public List<CustomerOrderViewResponse> getCustomerOrdersByBranch(Long branchId, Long customerId) {
-        return orderRepository.findByBranchIdAndCustomerIdOrderByOrderDateDesc(branchId, customerId)
-                .stream().map(this::buildCustomerOrderViewResponse).toList();
+    public CustomerOrderPageResponse getCustomerOrdersByBranch(Long branchId, Long customerId, Pageable pageable) {
+        Page<CustomerOrder> orders = orderRepository.findByBranchIdAndCustomerId(branchId, customerId, pageable);
+
+        return CustomerOrderPageResponse.builder()
+                .content(orders.getContent().stream().map(this::buildCustomerOrderViewResponse).toList())
+                .page(orders.getNumber())
+                .pageSize(orders.getSize())
+                .totalElements(orders.getTotalElements())
+                .totalPages(orders.getTotalPages())
+                .sort(formatPageSort(pageable))
+                .build();
     }
 
     @Override
@@ -1066,6 +1076,16 @@ public class SalesServiceImpl implements SalesService {
             return null;
         }
         return paymentMethods.size() == 1 ? paymentMethods.get(0) : "MIXED";
+    }
+
+    private String formatPageSort(Pageable pageable) {
+        if (pageable.getSort().isUnsorted()) {
+            return "";
+        }
+        return pageable.getSort().stream()
+                .map(order -> order.getProperty() + "," + order.getDirection().name().toLowerCase())
+                .reduce((left, right) -> left + ";" + right)
+                .orElse("");
     }
 
     private OrderProductResponse mapOrderProduct(OrderProduct op) {

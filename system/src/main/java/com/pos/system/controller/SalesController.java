@@ -3,6 +3,9 @@ package com.pos.system.controller;
 import com.pos.system.dto.sale.*;
 import com.pos.system.service.SalesService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -55,9 +58,11 @@ public class SalesController {
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
     @GetMapping("/orders/branch/{branchId}/customer/{customerId}")
-    public ResponseEntity<List<CustomerOrderViewResponse>> getCustomerOrdersByBranch(
-            @PathVariable Long branchId, @PathVariable Long customerId) {
-        return ResponseEntity.ok(salesService.getCustomerOrdersByBranch(branchId, customerId));
+    public ResponseEntity<CustomerOrderPageResponse> getCustomerOrdersByBranch(
+            @PathVariable Long branchId,
+            @PathVariable Long customerId,
+            @PageableDefault(size = 25, sort = "orderDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(salesService.getCustomerOrdersByBranch(branchId, customerId, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")

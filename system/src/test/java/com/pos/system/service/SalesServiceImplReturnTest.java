@@ -19,6 +19,9 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -298,16 +301,24 @@ class SalesServiceImplReturnTest {
         payment.setOrderId(1L);
         payment.setPaymentMethod("CASH");
 
-        when(orderRepository.findByBranchIdAndCustomerIdOrderByOrderDateDesc(2L, 5L))
-                .thenReturn(List.of(order));
+        PageRequest pageRequest = PageRequest.of(0, 25, Sort.by(Sort.Direction.DESC, "orderDate"));
+
+        when(orderRepository.findByBranchIdAndCustomerId(2L, 5L, pageRequest))
+                .thenReturn(new PageImpl<>(List.of(order), pageRequest, 1));
         when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of(product));
         when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
         when(itemUnitRepository.findById(3L)).thenReturn(Optional.of(unit));
         when(paymentRepository.findByOrderId(1L)).thenReturn(List.of(payment));
 
-        List<CustomerOrderViewResponse> responses = salesService.getCustomerOrdersByBranch(2L, 5L);
+        var page = salesService.getCustomerOrdersByBranch(2L, 5L, pageRequest);
+        List<CustomerOrderViewResponse> responses = page.getContent();
 
         assertThat(responses).hasSize(1);
+        assertThat(page.getPage()).isEqualTo(0);
+        assertThat(page.getPageSize()).isEqualTo(25);
+        assertThat(page.getTotalElements()).isEqualTo(1);
+        assertThat(page.getTotalPages()).isEqualTo(1);
+        assertThat(page.getSort()).isEqualTo("orderDate,desc");
         CustomerOrderViewResponse response = responses.get(0);
         assertThat(response.getOrderId()).isEqualTo(1L);
         assertThat(response.getInvoiceNo()).isEqualTo("INV-0001");
