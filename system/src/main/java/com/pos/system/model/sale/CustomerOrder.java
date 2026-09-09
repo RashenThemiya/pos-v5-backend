@@ -24,6 +24,9 @@ public class CustomerOrder {
     @Column(nullable = false, unique = true, length = 50)
     private String invoiceNo;
 
+    @Column(unique = true, length = 50)
+    private String orderNo;
+
     private Long userId;
     private Long customerId;
     private Long cashSessionId;
