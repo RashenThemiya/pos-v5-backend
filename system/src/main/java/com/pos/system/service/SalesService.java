@@ -15,6 +15,7 @@ public interface SalesService {
     OrderResponse getOrderById(Long orderId);
     OrderResponse getOrderByInvoiceNo(String invoiceNo);
     List<OrderResponse> getOrdersByBranch(Long branchId);
+    List<CustomerOrderViewResponse> getCustomerOrdersByBranch(Long branchId, Long customerId);
     List<OrderResponse> getOrdersByItem(Long branchId, Long itemId);
     List<OrderResponse> getOrdersBySession(Long branchId, Long sessionId);
     List<OrderResponse> getOrdersByDateRange(Long branchId, LocalDateTime from, LocalDateTime to);

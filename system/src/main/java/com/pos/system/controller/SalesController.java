@@ -54,6 +54,13 @@ public class SalesController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @GetMapping("/orders/branch/{branchId}/customer/{customerId}")
+    public ResponseEntity<List<CustomerOrderViewResponse>> getCustomerOrdersByBranch(
+            @PathVariable Long branchId, @PathVariable Long customerId) {
+        return ResponseEntity.ok(salesService.getCustomerOrdersByBranch(branchId, customerId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
     @GetMapping("/orders/branch/{branchId}/item/{itemId}")
     public ResponseEntity<List<OrderResponse>> getOrdersByItem(
             @PathVariable Long branchId, @PathVariable Long itemId) {

@@ -3,7 +3,11 @@ package com.pos.system.service;
 import com.pos.system.dto.sale.PaymentRequest;
 import com.pos.system.dto.sale.SalesReturnRequest;
 import com.pos.system.dto.sale.SalesReturnResponse;
+import com.pos.system.dto.sale.CustomerOrderViewResponse;
+import com.pos.system.model.catalog.Item;
+import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.sale.CustomerOrder;
+import com.pos.system.model.sale.OrderProduct;
 import com.pos.system.model.sale.Payment;
 import com.pos.system.model.sale.SalesReturn;
 import com.pos.system.model.sale.SalesReturnItem;
@@ -265,6 +269,60 @@ class SalesServiceImplReturnTest {
                 "INV-0001",
                 7L
         );
+    }
+
+    @Test
+    void getCustomerOrdersByBranch_returnsOrderViewDetails() {
+        CustomerOrder order = completedOrder();
+        order.setCustomerId(5L);
+        order.setOrderNo("SO-001");
+        order.setTotal(new BigDecimal("200.00"));
+
+        OrderProduct product = new OrderProduct();
+        product.setOrderId(1L);
+        product.setItemId(10L);
+        product.setUnitId(3L);
+        product.setQuantity(new BigDecimal("2"));
+        product.setUnitPrice(new BigDecimal("100.00"));
+        product.setLineTotal(new BigDecimal("200.00"));
+
+        Item item = new Item();
+        item.setItemId(10L);
+        item.setName("Coca-Cola 500ml");
+
+        ItemUnit unit = new ItemUnit();
+        unit.setUnitId(3L);
+        unit.setUnitName("PCS");
+
+        Payment payment = new Payment();
+        payment.setOrderId(1L);
+        payment.setPaymentMethod("CASH");
+
+        when(orderRepository.findByBranchIdAndCustomerIdOrderByOrderDateDesc(2L, 5L))
+                .thenReturn(List.of(order));
+        when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of(product));
+        when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
+        when(itemUnitRepository.findById(3L)).thenReturn(Optional.of(unit));
+        when(paymentRepository.findByOrderId(1L)).thenReturn(List.of(payment));
+
+        List<CustomerOrderViewResponse> responses = salesService.getCustomerOrdersByBranch(2L, 5L);
+
+        assertThat(responses).hasSize(1);
+        CustomerOrderViewResponse response = responses.get(0);
+        assertThat(response.getOrderId()).isEqualTo(1L);
+        assertThat(response.getInvoiceNo()).isEqualTo("INV-0001");
+        assertThat(response.getOrderNo()).isEqualTo("SO-001");
+        assertThat(response.getPaymentMethod()).isEqualTo("CASH");
+        assertThat(response.getItemCount()).isEqualByComparingTo("2");
+        assertThat(response.getTotalAmount()).isEqualByComparingTo("200.00");
+        assertThat(response.getStatus()).isEqualTo("COMPLETED");
+        assertThat(response.getItems()).hasSize(1);
+        assertThat(response.getItems().get(0).getItemId()).isEqualTo(10L);
+        assertThat(response.getItems().get(0).getItemName()).isEqualTo("Coca-Cola 500ml");
+        assertThat(response.getItems().get(0).getUnitName()).isEqualTo("PCS");
+        assertThat(response.getItems().get(0).getQuantity()).isEqualByComparingTo("2");
+        assertThat(response.getItems().get(0).getUnitPrice()).isEqualByComparingTo("100.00");
+        assertThat(response.getItems().get(0).getLineTotal()).isEqualByComparingTo("200.00");
     }
 
     @Test

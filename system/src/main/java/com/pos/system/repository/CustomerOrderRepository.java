@@ -19,6 +19,8 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
 
     boolean existsByInvoiceNo(String invoiceNo);
 
+    boolean existsByOrderNo(String orderNo);
+
     List<CustomerOrder> findByBranchIdOrderByOrderDateDesc(Long branchId);
 
     List<CustomerOrder> findByBranchIdAndCashSessionIdOrderByOrderDateDesc(Long branchId, Long cashSessionId);

@@ -96,6 +96,7 @@ public class SalesServiceImpl implements SalesService {
         CustomerOrder order = new CustomerOrder();
         order.setBranchId(request.getBranchId());
         order.setInvoiceNo(generateInvoiceNo(request.getBranchId()));
+        order.setOrderNo(generateOrderNo(request.getBranchId()));
         order.setUserId(request.getUserId());
         order.setCustomerId(request.getCustomerId());
         order.setCashSessionId(request.getCashSessionId());
@@ -171,6 +172,12 @@ public class SalesServiceImpl implements SalesService {
     public List<OrderResponse> getOrdersByBranch(Long branchId) {
         return orderRepository.findByBranchIdOrderByOrderDateDesc(branchId)
                 .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
+    public List<CustomerOrderViewResponse> getCustomerOrdersByBranch(Long branchId, Long customerId) {
+        return orderRepository.findByBranchIdAndCustomerIdOrderByOrderDateDesc(branchId, customerId)
+                .stream().map(this::buildCustomerOrderViewResponse).toList();
     }
 
     @Override
@@ -934,6 +941,26 @@ public class SalesServiceImpl implements SalesService {
         return invoiceNo;
     }
 
+    private String generateOrderNo(Long branchId) {
+        String prefix = "SO-" + branchId + "-";
+        String datePart = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        String orderNo = prefix + datePart + "-" + uniquePart;
+
+        while (orderRepository.existsByOrderNo(orderNo)) {
+            uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+            orderNo = prefix + datePart + "-" + uniquePart;
+        }
+        return orderNo;
+    }
+
+    private String resolveOrderNo(CustomerOrder order) {
+        if (order.getOrderNo() != null && !order.getOrderNo().isBlank()) {
+            return order.getOrderNo();
+        }
+        return order.getOrderId() != null ? String.format("SO-%03d", order.getOrderId()) : null;
+    }
+
     private void recordStatusHistory(Long orderId, String oldStatus, String newStatus, Long changedBy, String note) {
         OrderStatusHistory history = new OrderStatusHistory();
         history.setOrderId(orderId);
@@ -972,6 +999,7 @@ public class SalesServiceImpl implements SalesService {
                 .orderId(order.getOrderId())
                 .branchId(order.getBranchId())
                 .invoiceNo(order.getInvoiceNo())
+                .orderNo(resolveOrderNo(order))
                 .userId(order.getUserId())
                 .customerId(order.getCustomerId())
                 .cashSessionId(order.getCashSessionId())
@@ -987,6 +1015,57 @@ public class SalesServiceImpl implements SalesService {
                 .items(items)
                 .payments(payments)
                 .build();
+    }
+
+    private CustomerOrderViewResponse buildCustomerOrderViewResponse(CustomerOrder order) {
+        List<OrderProduct> products = orderProductRepository.findByOrderId(order.getOrderId());
+        List<CustomerOrderItemResponse> items = products.stream()
+                .map(this::mapCustomerOrderItem)
+                .toList();
+        BigDecimal itemCount = products.stream()
+                .map(product -> nvl(product.getQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return CustomerOrderViewResponse.builder()
+                .orderId(order.getOrderId())
+                .invoiceNo(order.getInvoiceNo())
+                .orderNo(resolveOrderNo(order))
+                .createdAt(order.getOrderDate())
+                .paymentMethod(resolvePaymentMethod(order.getOrderId()))
+                .items(items)
+                .itemCount(itemCount)
+                .totalAmount(order.getTotal())
+                .status(order.getStatus())
+                .build();
+    }
+
+    private CustomerOrderItemResponse mapCustomerOrderItem(OrderProduct op) {
+        String itemName = itemRepository.findById(op.getItemId())
+                .map(Item::getName)
+                .orElse(null);
+        ItemUnit unit = itemUnitRepository.findById(op.getUnitId()).orElse(null);
+
+        return CustomerOrderItemResponse.builder()
+                .itemId(op.getItemId())
+                .itemName(itemName)
+                .quantity(op.getQuantity())
+                .unitName(resolveUnitName(unit))
+                .unitPrice(op.getUnitPrice())
+                .lineTotal(op.getLineTotal())
+                .build();
+    }
+
+    private String resolvePaymentMethod(Long orderId) {
+        List<String> paymentMethods = paymentRepository.findByOrderId(orderId).stream()
+                .map(Payment::getPaymentMethod)
+                .filter(method -> method != null && !method.isBlank())
+                .distinct()
+                .toList();
+
+        if (paymentMethods.isEmpty()) {
+            return null;
+        }
+        return paymentMethods.size() == 1 ? paymentMethods.get(0) : "MIXED";
     }
 
     private OrderProductResponse mapOrderProduct(OrderProduct op) {
