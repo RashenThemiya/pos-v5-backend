@@ -13,6 +13,9 @@ import java.math.BigDecimal;
 @AllArgsConstructor
 public class CustomerOrderItemResponse {
     private Long itemId;
+    private Long variantId;
+    private String variantSku;
+    private String variantLabel;
     private String itemName;
     private BigDecimal quantity;
     private String unitName;

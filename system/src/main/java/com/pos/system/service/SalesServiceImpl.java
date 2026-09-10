@@ -1057,6 +1057,9 @@ public class SalesServiceImpl implements SalesService {
 
         return CustomerOrderItemResponse.builder()
                 .itemId(op.getItemId())
+                .variantId(op.getVariantId())
+                .variantSku(resolveVariantSku(op.getVariantId()))
+                .variantLabel(resolveVariantLabel(op.getVariantId()))
                 .itemName(itemName)
                 .quantity(op.getQuantity())
                 .unitName(resolveUnitName(unit))

@@ -89,6 +89,13 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.createSupply(dto));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_CREATE')")
+    @PostMapping("/manual-grns")
+    public ResponseEntity<SupplyResponseDto> createManualGrn(@RequestBody SupplyRequestDto dto) {
+        dto.setPoId(null);
+        return ResponseEntity.ok(supplierManagementService.createSupply(dto));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
     @GetMapping("/supplies/{supplyId}")
     public ResponseEntity<SupplyResponseDto> getSupplyById(@PathVariable Long supplyId) {

@@ -12,10 +12,12 @@ public class PurchaseOrderItemResponseDto {
     private Long poId;
     private Long itemId;
     private String itemName;
+    private String itemImage;
     private String sku;
     private Long variantId;
     private String variantSku;
     private String variantLabel;
+    private String variantImage;
     private Long unitId;
     private Long masterUnitId;
     private String unitName;

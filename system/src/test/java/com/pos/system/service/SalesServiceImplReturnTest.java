@@ -6,6 +6,8 @@ import com.pos.system.dto.sale.SalesReturnResponse;
 import com.pos.system.dto.sale.CustomerOrderViewResponse;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
+import com.pos.system.model.catalog.ItemVariantAttribute;
 import com.pos.system.model.sale.CustomerOrder;
 import com.pos.system.model.sale.OrderProduct;
 import com.pos.system.model.sale.Payment;
@@ -284,6 +286,7 @@ class SalesServiceImplReturnTest {
         OrderProduct product = new OrderProduct();
         product.setOrderId(1L);
         product.setItemId(10L);
+        product.setVariantId(12L);
         product.setUnitId(3L);
         product.setQuantity(new BigDecimal("2"));
         product.setUnitPrice(new BigDecimal("100.00"));
@@ -297,6 +300,14 @@ class SalesServiceImplReturnTest {
         unit.setUnitId(3L);
         unit.setUnitName("PCS");
 
+        ItemVariant variant = new ItemVariant();
+        variant.setVariantId(12L);
+        variant.setSku("COKE-500-CHILLED");
+
+        ItemVariantAttribute variantAttribute = new ItemVariantAttribute();
+        variantAttribute.setAttributeName("Bottle");
+        variantAttribute.setAttributeValue("500ml");
+
         Payment payment = new Payment();
         payment.setOrderId(1L);
         payment.setPaymentMethod("CASH");
@@ -308,6 +319,9 @@ class SalesServiceImplReturnTest {
         when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of(product));
         when(itemRepository.findById(10L)).thenReturn(Optional.of(item));
         when(itemUnitRepository.findById(3L)).thenReturn(Optional.of(unit));
+        when(itemVariantRepository.findById(12L)).thenReturn(Optional.of(variant));
+        when(itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(12L))
+                .thenReturn(List.of(variantAttribute));
         when(paymentRepository.findByOrderId(1L)).thenReturn(List.of(payment));
 
         var page = salesService.getCustomerOrdersByBranch(2L, 5L, pageRequest);
@@ -329,6 +343,9 @@ class SalesServiceImplReturnTest {
         assertThat(response.getStatus()).isEqualTo("COMPLETED");
         assertThat(response.getItems()).hasSize(1);
         assertThat(response.getItems().get(0).getItemId()).isEqualTo(10L);
+        assertThat(response.getItems().get(0).getVariantId()).isEqualTo(12L);
+        assertThat(response.getItems().get(0).getVariantSku()).isEqualTo("COKE-500-CHILLED");
+        assertThat(response.getItems().get(0).getVariantLabel()).isEqualTo("Bottle: 500ml");
         assertThat(response.getItems().get(0).getItemName()).isEqualTo("Coca-Cola 500ml");
         assertThat(response.getItems().get(0).getUnitName()).isEqualTo("PCS");
         assertThat(response.getItems().get(0).getQuantity()).isEqualByComparingTo("2");
