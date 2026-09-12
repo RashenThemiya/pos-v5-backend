@@ -117,6 +117,21 @@ class CashServiceImplTest {
     }
 
     @Test
+    void getSessionSummary_addsCustomerCashPaymentsToExpectedCash() {
+        CashSession session = openSession("1000.00");
+        CashSessionTransaction customerPayment = transaction("CUSTOMER_PAYMENT_IN", "750.00", "CASH");
+
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+        when(transactionRepository.findBySessionIdOrderByCreatedAtDesc(10L)).thenReturn(List.of(customerPayment));
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of());
+
+        SessionSummaryResponse summary = cashService.getSessionSummary(10L);
+
+        assertThat(summary.getTotalCustomerPayments()).isEqualByComparingTo("750.00");
+        assertThat(summary.getExpectedCash()).isEqualByComparingTo("1750.00");
+    }
+
+    @Test
     void closeSession_persistsExpectedCashAfterDeductingCashRefunds() {
         CashSession session = openSession("6000.00");
         CustomerOrder order = completedOrder("400.00");

@@ -1906,11 +1906,13 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         BigDecimal expenses = sumCashTransactionsByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumCashTransactionsByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds = sumCashTransactionsByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumCashTransactionsByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPayments = sumCashTransactionsByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumCashTransactionsByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
 
         return nvlMoney(cashSession.getOpeningCash())
                 .add(cashSales)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
