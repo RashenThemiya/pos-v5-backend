@@ -161,6 +161,26 @@ public class CashServiceImpl implements CashService {
     }
 
     @Override
+    public PreviousCashSessionResponse getPreviousSessionByCounter(Long counterId) {
+        findCounterById(counterId);
+        CashSession session = cashSessionRepository.findTopByCounterIdAndStatusOrderByOpenedAtDesc(counterId, "CLOSED")
+                .orElseThrow(() -> new RuntimeException("No previous closed session for counter: " + counterId));
+
+        Long sessionId = session.getSessionId();
+        SessionSummaryResponse summary = getSessionSummary(sessionId);
+        BigDecimal balance = session.getClosingCash() != null ? session.getClosingCash() : summary.getExpectedCash();
+
+        return PreviousCashSessionResponse.builder()
+                .balance(nvl(balance))
+                .session(buildSessionResponse(session))
+                .summary(summary)
+                .transactions(getTransactionsBySession(sessionId))
+                .expenses(getExpensesBySession(sessionId))
+                .withdrawals(getWithdrawalsBySession(sessionId))
+                .build();
+    }
+
+    @Override
     public List<SessionResponse> getSessionsByCounter(Long counterId) {
         return cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId)
                 .stream()

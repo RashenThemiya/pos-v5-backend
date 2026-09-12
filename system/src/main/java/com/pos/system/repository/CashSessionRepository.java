@@ -8,5 +8,6 @@ import java.util.Optional;
 
 public interface CashSessionRepository extends JpaRepository<CashSession, Long> {
     Optional<CashSession> findByCounterIdAndStatus(Long counterId, String status);
+    Optional<CashSession> findTopByCounterIdAndStatusOrderByOpenedAtDesc(Long counterId, String status);
     List<CashSession> findByCounterIdOrderByOpenedAtDesc(Long counterId);
 }

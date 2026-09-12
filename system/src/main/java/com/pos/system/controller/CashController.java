@@ -72,6 +72,12 @@ public class CashController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SESSION_VIEW')")
+    @GetMapping("/sessions/counter/{counterId}/previous")
+    public ResponseEntity<PreviousCashSessionResponse> getPreviousSessionByCounter(@PathVariable Long counterId) {
+        return ResponseEntity.ok(cashService.getPreviousSessionByCounter(counterId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SESSION_VIEW')")
     @GetMapping("/sessions/counter/{counterId}")
     public ResponseEntity<List<SessionResponse>> getSessionsByCounter(@PathVariable Long counterId) {
         return ResponseEntity.ok(cashService.getSessionsByCounter(counterId));
