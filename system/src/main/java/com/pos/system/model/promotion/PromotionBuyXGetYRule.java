@@ -26,6 +26,8 @@ public class PromotionBuyXGetYRule {
     @Column(nullable = false)
     private Long buyItemId;
 
+    private Long buyVariantId;
+
     // unit for the buy side — e.g. "buy 2 Boxes"
     @Column(nullable = false)
     private Long buyUnitId;
@@ -35,6 +37,8 @@ public class PromotionBuyXGetYRule {
 
     @Column(nullable = false)
     private Long getItemId;
+
+    private Long getVariantId;
 
     // unit for the get side — e.g. "get 1 Bottle free"
     @Column(nullable = false)

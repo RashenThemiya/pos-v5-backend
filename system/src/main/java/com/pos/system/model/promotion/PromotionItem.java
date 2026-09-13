@@ -26,6 +26,8 @@ public class PromotionItem {
     @Column(nullable = false)
     private Long itemId;
 
+    private Long variantId;
+
     // which unit the maxQty and discount applies to
     // e.g. unitId for "Box" means discount applies when sold by the box
     @Column(nullable = false)
