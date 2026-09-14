@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.cash.*;
+import com.pos.system.model.auth.User;
 import com.pos.system.model.cash.*;
 import com.pos.system.model.sale.CustomerOrder;
 import com.pos.system.model.sale.Payment;
@@ -11,8 +12,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -28,6 +31,7 @@ public class CashServiceImpl implements CashService {
     private final WithdrawalRepository withdrawalRepository;
     private final CustomerOrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
+    private final UserRepository userRepository;
 
     // ─── Counter ────────────────────────────────────────────────────────────────
 
@@ -182,9 +186,13 @@ public class CashServiceImpl implements CashService {
 
     @Override
     public List<SessionResponse> getSessionsByCounter(Long counterId) {
-        return cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId)
-                .stream()
-                .map(this::buildSessionResponse)
+        List<CashSession> sessions = cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId);
+        Set<Long> userIds = new HashSet<>();
+        sessions.forEach(session -> collectSessionUserIds(session, userIds));
+        Map<Long, String> userNamesById = loadUserNames(userIds);
+
+        return sessions.stream()
+                .map(session -> buildSessionResponse(session, userNamesById))
                 .toList();
     }
 
@@ -502,6 +510,12 @@ public class CashServiceImpl implements CashService {
     }
 
     private SessionResponse buildSessionResponse(CashSession session) {
+        Set<Long> userIds = new HashSet<>();
+        collectSessionUserIds(session, userIds);
+        return buildSessionResponse(session, loadUserNames(userIds));
+    }
+
+    private SessionResponse buildSessionResponse(CashSession session, Map<Long, String> userNamesById) {
         List<DenominationDto> opening = denominationRepository
                 .findBySessionIdAndType(session.getSessionId(), "OPENING")
                 .stream().map(this::mapDenomination).toList();
@@ -514,9 +528,11 @@ public class CashServiceImpl implements CashService {
                 .sessionId(session.getSessionId())
                 .counterId(session.getCounterId())
                 .openedBy(session.getOpenedBy())
+                .openedByName(userNamesById.get(session.getOpenedBy()))
                 .openedAt(session.getOpenedAt())
                 .openingCash(session.getOpeningCash())
                 .closedBy(session.getClosedBy())
+                .closedByName(userNamesById.get(session.getClosedBy()))
                 .closedAt(session.getClosedAt())
                 .closingCash(session.getClosingCash())
                 .expectedCash(session.getExpectedCash())
@@ -527,6 +543,32 @@ public class CashServiceImpl implements CashService {
                 .openingDenominations(opening)
                 .closingDenominations(closing)
                 .build();
+    }
+
+    private void collectSessionUserIds(CashSession session, Set<Long> userIds) {
+        if (session.getOpenedBy() != null) {
+            userIds.add(session.getOpenedBy());
+        }
+        if (session.getClosedBy() != null) {
+            userIds.add(session.getClosedBy());
+        }
+    }
+
+    private Map<Long, String> loadUserNames(Set<Long> userIds) {
+        Map<Long, String> userNamesById = new HashMap<>();
+        if (userIds.isEmpty()) {
+            return userNamesById;
+        }
+
+        Iterable<User> users = userRepository.findAllById(userIds);
+        if (users == null) {
+            return userNamesById;
+        }
+
+        for (User user : users) {
+            userNamesById.put(user.getUserId(), clean(user.getFullName()));
+        }
+        return userNamesById;
     }
 
     private Counter findCounterById(Long counterId) {
