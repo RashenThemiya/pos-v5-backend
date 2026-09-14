@@ -2,6 +2,7 @@ package com.pos.system.service;
 
 import com.pos.system.dto.promotion.*;
 import com.pos.system.model.catalog.ItemUnit;
+import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.promotion.*;
 import com.pos.system.repository.*;
@@ -14,6 +15,8 @@ import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -26,6 +29,8 @@ public class PromotionServiceImpl implements PromotionService {
     private final PromotionBuyXGetYRuleRepository buyXGetYRuleRepository;
     private final PromotionRedemptionRepository redemptionRepository;
     private final ItemUnitRepository itemUnitRepository;
+    private final ItemVariantRepository itemVariantRepository;
+    private final ItemVariantAttributeRepository itemVariantAttributeRepository;
     private final UnitMasterRepository unitMasterRepository;
 
     // ─── Promotion CRUD ──────────────────────────────────────────────────────────
@@ -100,18 +105,24 @@ public class PromotionServiceImpl implements PromotionService {
             throw new RuntimeException("Items can only be added to ITEM_PERCENTAGE or ITEM_FIXED promotions");
         }
 
-        promotionItemRepository.findByPromotionIdAndItemId(promotionId, request.getItemId())
-                .ifPresent(x -> {
-                    throw new RuntimeException("Item already linked to this promotion");
-                });
+        boolean alreadyLinked = promotionItemRepository.findByPromotionId(promotionId).stream()
+                .anyMatch(existing -> Boolean.TRUE.equals(existing.getIsActive())
+                        && Objects.equals(existing.getItemId(), request.getItemId())
+                        && Objects.equals(existing.getVariantId(), request.getVariantId())
+                        && Objects.equals(existing.getUnitId(), request.getUnitId()));
+        if (alreadyLinked) {
+            throw new RuntimeException("Item, variant, and unit are already linked to this promotion");
+        }
 
         // validate unit belongs to item
         validateUnitBelongsToItem(request.getItemId(), request.getUnitId());
+        validateVariantBelongsToItem(request.getBranchId(), request.getItemId(), request.getVariantId());
 
         PromotionItem item = new PromotionItem();
         item.setBranchId(request.getBranchId());
         item.setPromotionId(promotionId);
         item.setItemId(request.getItemId());
+        item.setVariantId(request.getVariantId());
         item.setUnitId(request.getUnitId());
         item.setMaxQty(request.getMaxQty());
         item.setUsedQty(BigDecimal.ZERO);
@@ -122,7 +133,9 @@ public class PromotionServiceImpl implements PromotionService {
 
     @Override
     public void removeItemFromPromotion(Long promotionId, Long itemId) {
-        PromotionItem item = promotionItemRepository.findByPromotionIdAndItemId(promotionId, itemId)
+        PromotionItem item = promotionItemRepository.findById(itemId)
+                .filter(link -> Objects.equals(link.getPromotionId(), promotionId))
+                .or(() -> promotionItemRepository.findByPromotionIdAndItemId(promotionId, itemId))
                 .orElseThrow(() -> new RuntimeException("Item not found in promotion"));
         item.setIsActive(false);
         promotionItemRepository.save(item);
@@ -186,14 +199,18 @@ public class PromotionServiceImpl implements PromotionService {
 
         validateUnitBelongsToItem(request.getBuyItemId(), request.getBuyUnitId());
         validateUnitBelongsToItem(request.getGetItemId(), request.getGetUnitId());
+        validateVariantBelongsToItem(request.getBranchId(), request.getBuyItemId(), request.getBuyVariantId());
+        validateVariantBelongsToItem(request.getBranchId(), request.getGetItemId(), request.getGetVariantId());
 
         PromotionBuyXGetYRule rule = new PromotionBuyXGetYRule();
         rule.setBranchId(request.getBranchId());
         rule.setPromotionId(promotionId);
         rule.setBuyItemId(request.getBuyItemId());
+        rule.setBuyVariantId(request.getBuyVariantId());
         rule.setBuyUnitId(request.getBuyUnitId());
         rule.setBuyQty(request.getBuyQty());
         rule.setGetItemId(request.getGetItemId());
+        rule.setGetVariantId(request.getGetVariantId());
         rule.setGetUnitId(request.getGetUnitId());
         rule.setGetQty(request.getGetQty());
         rule.setGetDiscountPercent(
@@ -311,7 +328,8 @@ public class PromotionServiceImpl implements PromotionService {
                 List<PromotionItem> promoItems = promotionItemRepository.findByPromotionIdAndIsActiveTrue(promo.getPromotionId());
                 for (ApplyPromotionRequest.CartItemDto cartItem : request.getCartItems()) {
                     promoItems.stream()
-                            .filter(pi -> pi.getItemId().equals(cartItem.getItemId()))
+                            .filter(pi -> pi.getItemId().equals(cartItem.getItemId())
+                                    && variantApplies(pi.getVariantId(), cartItem.getVariantId()))
                             .findFirst()
                             .ifPresent(pi -> {
                                 // convert both qtys to base units to compare correctly
@@ -337,7 +355,7 @@ public class PromotionServiceImpl implements PromotionService {
                                 lineDiscounts.add(ApplyPromotionResponse.LineDiscountDto.builder()
                                         .itemId(cartItem.getItemId())
                                         .discountAmount(lineDiscount)
-                                        .reason(promo.getValue() + "% off (unit: " + getUnitName(pi.getUnitId()) + ")")
+                                        .reason(promo.getValue() + "% off (unit: " + getUnitName(pi.getUnitId()) + variantReason(pi.getVariantId()) + ")")
                                         .build());
                             });
                 }
@@ -350,7 +368,8 @@ public class PromotionServiceImpl implements PromotionService {
                 List<PromotionItem> promoItems = promotionItemRepository.findByPromotionIdAndIsActiveTrue(promo.getPromotionId());
                 for (ApplyPromotionRequest.CartItemDto cartItem : request.getCartItems()) {
                     promoItems.stream()
-                            .filter(pi -> pi.getItemId().equals(cartItem.getItemId()))
+                            .filter(pi -> pi.getItemId().equals(cartItem.getItemId())
+                                    && variantApplies(pi.getVariantId(), cartItem.getVariantId()))
                             .findFirst()
                             .ifPresent(pi -> {
                                 BigDecimal lineTotal = cartItem.getUnitPrice().multiply(cartItem.getQty());
@@ -358,7 +377,7 @@ public class PromotionServiceImpl implements PromotionService {
                                 lineDiscounts.add(ApplyPromotionResponse.LineDiscountDto.builder()
                                         .itemId(cartItem.getItemId())
                                         .discountAmount(lineDiscount)
-                                        .reason("Fixed " + promo.getValue() + " off (unit: " + getUnitName(pi.getUnitId()) + ")")
+                                        .reason("Fixed " + promo.getValue() + " off (unit: " + getUnitName(pi.getUnitId()) + variantReason(pi.getVariantId()) + ")")
                                         .build());
                             });
                 }
@@ -376,7 +395,8 @@ public class PromotionServiceImpl implements PromotionService {
 
                     // check cart has enough of the buy item (in base units)
                     BigDecimal cartBuyQtyInBase = request.getCartItems().stream()
-                            .filter(c -> c.getItemId().equals(rule.getBuyItemId()))
+                            .filter(c -> c.getItemId().equals(rule.getBuyItemId())
+                                    && variantApplies(rule.getBuyVariantId(), c.getVariantId()))
                             .map(c -> toBaseQty(c.getItemId(), c.getUnitId(), c.getQty()))
                             .reduce(BigDecimal.ZERO, BigDecimal::add);
 
@@ -386,7 +406,8 @@ public class PromotionServiceImpl implements PromotionService {
                         BigDecimal requiredGetQtyInBase = toBaseQty(rule.getGetItemId(), rule.getGetUnitId(), rule.getGetQty());
 
                         request.getCartItems().stream()
-                                .filter(c -> c.getItemId().equals(rule.getGetItemId()))
+                                .filter(c -> c.getItemId().equals(rule.getGetItemId())
+                                        && variantApplies(rule.getGetVariantId(), c.getVariantId()))
                                 .findFirst()
                                 .ifPresent(getItem -> {
                                     BigDecimal cartGetQtyInBase = toBaseQty(getItem.getItemId(), getItem.getUnitId(), getItem.getQty());
@@ -491,6 +512,56 @@ public class PromotionServiceImpl implements PromotionService {
                         "Unit " + unitId + " does not belong to item " + itemId));
     }
 
+    private void validateVariantBelongsToItem(Long branchId, Long itemId, Long variantId) {
+        if (variantId == null) {
+            return;
+        }
+
+        ItemVariant variant = itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .orElseThrow(() -> new RuntimeException("Variant not found for item: " + variantId));
+        if (!Objects.equals(variant.getBranchId(), branchId)) {
+            throw new RuntimeException("Variant does not belong to branch: " + variantId);
+        }
+        if (!Boolean.TRUE.equals(variant.getIsActive())) {
+            throw new RuntimeException("Variant is inactive: " + variantId);
+        }
+    }
+
+    private boolean variantApplies(Long promotionVariantId, Long cartVariantId) {
+        return promotionVariantId == null || Objects.equals(promotionVariantId, cartVariantId);
+    }
+
+    private String variantReason(Long variantId) {
+        String label = resolveVariantLabel(variantId);
+        return label == null ? "" : ", variant: " + label;
+    }
+
+    private String resolveVariantSku(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+        return itemVariantRepository.findById(variantId)
+                .map(ItemVariant::getVariantSku)
+                .orElse(null);
+    }
+
+    private String resolveVariantLabel(Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+
+        String label = itemVariantAttributeRepository.findByVariantIdOrderByAttributeNameAsc(variantId)
+                .stream()
+                .map(attribute -> attribute.getAttributeName() + ": " + attribute.getAttributeValue())
+                .collect(Collectors.joining(" / "));
+
+        if (label != null && !label.isBlank()) {
+            return label;
+        }
+
+        return resolveVariantSku(variantId);
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────────
 
     private void mapRequestToPromotion(PromotionRequest request, Promotion p) {
@@ -555,6 +626,9 @@ public class PromotionServiceImpl implements PromotionService {
                 .id(i.getId())
                 .promotionId(i.getPromotionId())
                 .itemId(i.getItemId())
+                .variantId(i.getVariantId())
+                .variantSku(resolveVariantSku(i.getVariantId()))
+                .variantLabel(resolveVariantLabel(i.getVariantId()))
                 .unitId(i.getUnitId())
                 .masterUnitId(getMasterUnitId(i.getUnitId()))
                 .unitName(getUnitName(i.getUnitId()))
@@ -580,11 +654,17 @@ public class PromotionServiceImpl implements PromotionService {
                 .ruleId(r.getRuleId())
                 .promotionId(r.getPromotionId())
                 .buyItemId(r.getBuyItemId())
+                .buyVariantId(r.getBuyVariantId())
+                .buyVariantSku(resolveVariantSku(r.getBuyVariantId()))
+                .buyVariantLabel(resolveVariantLabel(r.getBuyVariantId()))
                 .buyUnitId(r.getBuyUnitId())
                 .buyMasterUnitId(getMasterUnitId(r.getBuyUnitId()))
                 .buyUnitName(getUnitName(r.getBuyUnitId()))
                 .buyQty(r.getBuyQty())
                 .getItemId(r.getGetItemId())
+                .getVariantId(r.getGetVariantId())
+                .getVariantSku(resolveVariantSku(r.getGetVariantId()))
+                .getVariantLabel(resolveVariantLabel(r.getGetVariantId()))
                 .getUnitId(r.getGetUnitId())
                 .getMasterUnitId(getMasterUnitId(r.getGetUnitId()))
                 .getUnitName(getUnitName(r.getGetUnitId()))

@@ -123,6 +123,7 @@ public class SaleProductSearchResponse {
         private Long promotionItemId;
         private Long promotionBatchId;
         private Long unitId;
+        private Long variantId;
         private String batchBarcode;
         private BigDecimal maxQty;
         private BigDecimal usedQty;

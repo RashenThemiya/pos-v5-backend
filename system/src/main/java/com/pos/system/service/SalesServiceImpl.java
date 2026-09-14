@@ -702,17 +702,18 @@ public class SalesServiceImpl implements SalesService {
                 .units(units.stream().map(this::mapSearchUnit).toList())
                 .variants(variants.stream().map(this::mapSearchVariant).toList())
                 .batches(batches.stream().map(this::mapSearchBatch).toList())
-                .promotions(findSalePromotions(item, matchedBatch))
+                .promotions(findSalePromotions(item, variantId, matchedBatch))
                 .build();
     }
 
-    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, StockBatch matchedBatch) {
+    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, Long variantId, StockBatch matchedBatch) {
         List<SaleProductSearchResponse.PromotionDto> result = new ArrayList<>();
         List<Promotion> activePromotions = promotionRepository.findActiveByBranchIdAndNow(item.getBranchId(), LocalDateTime.now());
 
         for (Promotion promotion : activePromotions) {
             promotionItemRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
                     .filter(promotionItem -> promotionItem.getItemId().equals(item.getItemId()))
+                    .filter(promotionItem -> promotionItem.getVariantId() == null || promotionItem.getVariantId().equals(variantId))
                     .forEach(promotionItem -> result.add(mapSearchPromotion(promotion, promotionItem, null)));
 
             if (matchedBatch != null) {
@@ -746,6 +747,7 @@ public class SalesServiceImpl implements SalesService {
                 .promotionItemId(promotionItem != null ? promotionItem.getId() : null)
                 .promotionBatchId(promotionBatch != null ? promotionBatch.getId() : null)
                 .unitId(promotionItem != null ? promotionItem.getUnitId() : null)
+                .variantId(promotionItem != null ? promotionItem.getVariantId() : null)
                 .batchBarcode(promotionBatch != null ? promotionBatch.getBarcode() : null)
                 .maxQty(promotionItem != null ? promotionItem.getMaxQty() : promotionBatch.getMaxQty())
                 .usedQty(promotionItem != null ? promotionItem.getUsedQty() : promotionBatch.getUsedQty())

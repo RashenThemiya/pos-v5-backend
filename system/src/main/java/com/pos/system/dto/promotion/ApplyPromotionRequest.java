@@ -16,6 +16,7 @@ public class ApplyPromotionRequest {
     @Data
     public static class CartItemDto {
         private Long itemId;
+        private Long variantId;
         private Long unitId;            // which unit this line is sold in
         private String batchBarcode;    // for BATCH type promos
         private BigDecimal qty;         // qty in the above unitId
