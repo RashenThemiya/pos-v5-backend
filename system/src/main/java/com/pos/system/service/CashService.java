@@ -17,6 +17,7 @@ public interface CashService {
     SessionResponse closeSession(Long sessionId, CloseSessionRequest request);
     SessionResponse getSessionById(Long sessionId);
     SessionResponse getActiveSessionByCounter(Long counterId);
+    PreviousCashSessionResponse getPreviousSessionByCounter(Long counterId);
     List<SessionResponse> getSessionsByCounter(Long counterId);
 
     // Session summary

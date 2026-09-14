@@ -161,6 +161,26 @@ public class CashServiceImpl implements CashService {
     }
 
     @Override
+    public PreviousCashSessionResponse getPreviousSessionByCounter(Long counterId) {
+        findCounterById(counterId);
+        CashSession session = cashSessionRepository.findTopByCounterIdAndStatusOrderByOpenedAtDesc(counterId, "CLOSED")
+                .orElseThrow(() -> new RuntimeException("No previous closed session for counter: " + counterId));
+
+        Long sessionId = session.getSessionId();
+        SessionSummaryResponse summary = getSessionSummary(sessionId);
+        BigDecimal balance = session.getClosingCash() != null ? session.getClosingCash() : summary.getExpectedCash();
+
+        return PreviousCashSessionResponse.builder()
+                .balance(nvl(balance))
+                .session(buildSessionResponse(session))
+                .summary(summary)
+                .transactions(getTransactionsBySession(sessionId))
+                .expenses(getExpensesBySession(sessionId))
+                .withdrawals(getWithdrawalsBySession(sessionId))
+                .build();
+    }
+
+    @Override
     public List<SessionResponse> getSessionsByCounter(Long counterId) {
         return cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId)
                 .stream()
@@ -181,11 +201,13 @@ public class CashServiceImpl implements CashService {
         BigDecimal expenses      = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals   = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds   = sumByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPays  = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
 
         BigDecimal expected = nvl(session.getOpeningCash())
                 .add(cashSales)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
@@ -202,6 +224,7 @@ public class CashServiceImpl implements CashService {
                 .totalExpenses(expenses)
                 .totalWithdrawals(withdrawals)
                 .totalCashRefunds(cashRefunds)
+                .totalCustomerPayments(customerPayments)
                 .totalSupplierPayments(supplierPays)
                 .totalSupplierRefunds(supplierRefunds)
                 .expectedCash(expected)
@@ -370,10 +393,12 @@ public class CashServiceImpl implements CashService {
         BigDecimal expenses = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds = sumByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPayments = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
         BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
         return nvl(openingCash)
                 .add(cashIn)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
