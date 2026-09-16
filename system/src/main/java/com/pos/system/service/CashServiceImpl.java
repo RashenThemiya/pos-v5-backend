@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.cash.*;
+import com.pos.system.model.auth.User;
 import com.pos.system.model.cash.*;
 import com.pos.system.model.sale.CustomerOrder;
 import com.pos.system.model.sale.Payment;
@@ -11,8 +12,10 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 @Service
@@ -28,6 +31,7 @@ public class CashServiceImpl implements CashService {
     private final WithdrawalRepository withdrawalRepository;
     private final CustomerOrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
+    private final UserRepository userRepository;
 
     // ─── Counter ────────────────────────────────────────────────────────────────
 
@@ -90,11 +94,23 @@ public class CashServiceImpl implements CashService {
         session.setOpenedBy(request.getOpenedBy());
         session.setOpenedAt(LocalDateTime.now());
         session.setOpeningCash(nvl(request.getOpeningCash()));
+        session.setSessionType(clean(request.getSessionType()));
+        session.setPurpose(clean(request.getPurpose()));
         session.setStatus("OPEN");
 
         CashSession saved = cashSessionRepository.save(session);
 
         saveDenominations(saved.getSessionId(), "OPENING", request.getDenominations());
+        recordTransaction(
+                saved.getSessionId(),
+                "SESSION_OPEN",
+                saved.getOpeningCash(),
+                "CASH",
+                null, null,
+                null, null,
+                saved.getPurpose() != null ? saved.getPurpose() : "Cash session opened",
+                saved.getOpenedBy()
+        );
 
         return buildSessionResponse(saved);
     }
@@ -121,6 +137,17 @@ public class CashServiceImpl implements CashService {
         CashSession saved = cashSessionRepository.save(session);
 
         saveDenominations(saved.getSessionId(), "CLOSING", request.getDenominations());
+        String closeNote = clean(request.getNote());
+        recordTransaction(
+                saved.getSessionId(),
+                "SESSION_CLOSE",
+                closingCash,
+                "CASH",
+                null, null,
+                null, null,
+                closeNote != null ? closeNote : "Cash session closed",
+                request.getClosedBy()
+        );
 
         return buildSessionResponse(saved);
     }
@@ -138,10 +165,34 @@ public class CashServiceImpl implements CashService {
     }
 
     @Override
+    public PreviousCashSessionResponse getPreviousSessionByCounter(Long counterId) {
+        findCounterById(counterId);
+        CashSession session = cashSessionRepository.findTopByCounterIdAndStatusOrderByOpenedAtDesc(counterId, "CLOSED")
+                .orElseThrow(() -> new RuntimeException("No previous closed session for counter: " + counterId));
+
+        Long sessionId = session.getSessionId();
+        SessionSummaryResponse summary = getSessionSummary(sessionId);
+        BigDecimal balance = session.getClosingCash() != null ? session.getClosingCash() : summary.getExpectedCash();
+
+        return PreviousCashSessionResponse.builder()
+                .balance(nvl(balance))
+                .session(buildSessionResponse(session))
+                .summary(summary)
+                .transactions(getTransactionsBySession(sessionId))
+                .expenses(getExpensesBySession(sessionId))
+                .withdrawals(getWithdrawalsBySession(sessionId))
+                .build();
+    }
+
+    @Override
     public List<SessionResponse> getSessionsByCounter(Long counterId) {
-        return cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId)
-                .stream()
-                .map(this::buildSessionResponse)
+        List<CashSession> sessions = cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(counterId);
+        Set<Long> userIds = new HashSet<>();
+        sessions.forEach(session -> collectSessionUserIds(session, userIds));
+        Map<Long, String> userNamesById = loadUserNames(userIds);
+
+        return sessions.stream()
+                .map(session -> buildSessionResponse(session, userNamesById))
                 .toList();
     }
 
@@ -158,11 +209,13 @@ public class CashServiceImpl implements CashService {
         BigDecimal expenses      = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals   = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds   = sumByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPays  = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
-        BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
+        BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
 
         BigDecimal expected = nvl(session.getOpeningCash())
                 .add(cashSales)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
@@ -179,6 +232,7 @@ public class CashServiceImpl implements CashService {
                 .totalExpenses(expenses)
                 .totalWithdrawals(withdrawals)
                 .totalCashRefunds(cashRefunds)
+                .totalCustomerPayments(customerPayments)
                 .totalSupplierPayments(supplierPays)
                 .totalSupplierRefunds(supplierRefunds)
                 .expectedCash(expected)
@@ -323,7 +377,7 @@ public class CashServiceImpl implements CashService {
         txn.setExpenseId(expenseId);
         txn.setWithdrawalId(withdrawalId);
         txn.setNote(note);
-        txn.setCreatedBy(createdBy);
+        txn.setCreatedBy(createdBy != null ? createdBy : 1L);
         txn.setCreatedAt(LocalDateTime.now());
         transactionRepository.save(txn);
     }
@@ -347,10 +401,12 @@ public class CashServiceImpl implements CashService {
         BigDecimal expenses = sumByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds = sumByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPayments = sumByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
-        BigDecimal supplierRefunds = sumByType(txns, "SUPPLIER_REFUND_IN");
+        BigDecimal supplierRefunds = sumByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
         return nvl(openingCash)
                 .add(cashIn)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
@@ -454,6 +510,12 @@ public class CashServiceImpl implements CashService {
     }
 
     private SessionResponse buildSessionResponse(CashSession session) {
+        Set<Long> userIds = new HashSet<>();
+        collectSessionUserIds(session, userIds);
+        return buildSessionResponse(session, loadUserNames(userIds));
+    }
+
+    private SessionResponse buildSessionResponse(CashSession session, Map<Long, String> userNamesById) {
         List<DenominationDto> opening = denominationRepository
                 .findBySessionIdAndType(session.getSessionId(), "OPENING")
                 .stream().map(this::mapDenomination).toList();
@@ -466,17 +528,47 @@ public class CashServiceImpl implements CashService {
                 .sessionId(session.getSessionId())
                 .counterId(session.getCounterId())
                 .openedBy(session.getOpenedBy())
+                .openedByName(userNamesById.get(session.getOpenedBy()))
                 .openedAt(session.getOpenedAt())
                 .openingCash(session.getOpeningCash())
                 .closedBy(session.getClosedBy())
+                .closedByName(userNamesById.get(session.getClosedBy()))
                 .closedAt(session.getClosedAt())
                 .closingCash(session.getClosingCash())
                 .expectedCash(session.getExpectedCash())
                 .cashDifference(session.getCashDifference())
+                .sessionType(session.getSessionType())
+                .purpose(session.getPurpose())
                 .status(session.getStatus())
                 .openingDenominations(opening)
                 .closingDenominations(closing)
                 .build();
+    }
+
+    private void collectSessionUserIds(CashSession session, Set<Long> userIds) {
+        if (session.getOpenedBy() != null) {
+            userIds.add(session.getOpenedBy());
+        }
+        if (session.getClosedBy() != null) {
+            userIds.add(session.getClosedBy());
+        }
+    }
+
+    private Map<Long, String> loadUserNames(Set<Long> userIds) {
+        Map<Long, String> userNamesById = new HashMap<>();
+        if (userIds.isEmpty()) {
+            return userNamesById;
+        }
+
+        Iterable<User> users = userRepository.findAllById(userIds);
+        if (users == null) {
+            return userNamesById;
+        }
+
+        for (User user : users) {
+            userNamesById.put(user.getUserId(), clean(user.getFullName()));
+        }
+        return userNamesById;
     }
 
     private Counter findCounterById(Long counterId) {
@@ -491,6 +583,13 @@ public class CashServiceImpl implements CashService {
 
     private BigDecimal nvl(BigDecimal value) {
         return value != null ? value : BigDecimal.ZERO;
+    }
+
+    private String clean(String value) {
+        if (value == null || value.trim().isEmpty()) {
+            return null;
+        }
+        return value.trim();
     }
 
     // ─── Mappers ─────────────────────────────────────────────────────────────────
@@ -525,6 +624,10 @@ public class CashServiceImpl implements CashService {
                 .paymentId(t.getPaymentId())
                 .supplierPaymentId(t.getSupplierPaymentId())
                 .purchaseReturnId(t.getPurchaseReturnId())
+                .supplierId(t.getSupplierId())
+                .supplyId(t.getSupplyId())
+                .counterId(t.getCounterId())
+                .referenceNo(t.getReferenceNo())
                 .expenseId(t.getExpenseId())
                 .withdrawalId(t.getWithdrawalId())
                 .orderId(t.getOrderId())

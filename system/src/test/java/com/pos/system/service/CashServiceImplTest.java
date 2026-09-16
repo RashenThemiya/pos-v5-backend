@@ -1,8 +1,11 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.cash.CloseSessionRequest;
+import com.pos.system.dto.cash.PreviousCashSessionResponse;
 import com.pos.system.dto.cash.SessionResponse;
 import com.pos.system.dto.cash.SessionSummaryResponse;
+import com.pos.system.model.auth.User;
+import com.pos.system.model.cash.Counter;
 import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.sale.CustomerOrder;
@@ -14,6 +17,7 @@ import com.pos.system.repository.CounterRepository;
 import com.pos.system.repository.CustomerOrderRepository;
 import com.pos.system.repository.ExpenseRepository;
 import com.pos.system.repository.PaymentRepository;
+import com.pos.system.repository.UserRepository;
 import com.pos.system.repository.WithdrawalRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +30,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -39,6 +44,7 @@ class CashServiceImplTest {
     @Mock private WithdrawalRepository withdrawalRepository;
     @Mock private CustomerOrderRepository orderRepository;
     @Mock private PaymentRepository paymentRepository;
+    @Mock private UserRepository userRepository;
 
     private CashServiceImpl cashService;
 
@@ -52,7 +58,8 @@ class CashServiceImplTest {
                 expenseRepository,
                 withdrawalRepository,
                 orderRepository,
-                paymentRepository
+                paymentRepository,
+                userRepository
         );
     }
 
@@ -115,6 +122,21 @@ class CashServiceImplTest {
     }
 
     @Test
+    void getSessionSummary_addsCustomerCashPaymentsToExpectedCash() {
+        CashSession session = openSession("1000.00");
+        CashSessionTransaction customerPayment = transaction("CUSTOMER_PAYMENT_IN", "750.00", "CASH");
+
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+        when(transactionRepository.findBySessionIdOrderByCreatedAtDesc(10L)).thenReturn(List.of(customerPayment));
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of());
+
+        SessionSummaryResponse summary = cashService.getSessionSummary(10L);
+
+        assertThat(summary.getTotalCustomerPayments()).isEqualByComparingTo("750.00");
+        assertThat(summary.getExpectedCash()).isEqualByComparingTo("1750.00");
+    }
+
+    @Test
     void closeSession_persistsExpectedCashAfterDeductingCashRefunds() {
         CashSession session = openSession("6000.00");
         CustomerOrder order = completedOrder("400.00");
@@ -142,6 +164,63 @@ class CashServiceImplTest {
         assertThat(response.getStatus()).isEqualTo("CLOSED");
     }
 
+    @Test
+    void getSessionsByCounter_populatesOpenedAndClosedUserNames() {
+        CashSession session = openSession("1000.00");
+        session.setClosedBy(8L);
+        session.setStatus("CLOSED");
+
+        User opener = user(7L, "Default Super Administrator");
+        User closer = user(8L, "Store Manager");
+
+        when(cashSessionRepository.findByCounterIdOrderByOpenedAtDesc(1L)).thenReturn(List.of(session));
+        when(userRepository.findAllById(any())).thenReturn(List.of(opener, closer));
+        when(denominationRepository.findBySessionIdAndType(10L, "OPENING")).thenReturn(List.of());
+        when(denominationRepository.findBySessionIdAndType(10L, "CLOSING")).thenReturn(List.of());
+
+        List<SessionResponse> response = cashService.getSessionsByCounter(1L);
+
+        assertThat(response).hasSize(1);
+        assertThat(response.get(0).getOpenedBy()).isEqualTo(7L);
+        assertThat(response.get(0).getOpenedByName()).isEqualTo("Default Super Administrator");
+        assertThat(response.get(0).getClosedBy()).isEqualTo(8L);
+        assertThat(response.get(0).getClosedByName()).isEqualTo("Store Manager");
+    }
+
+    @Test
+    void getPreviousSessionByCounter_returnsClosedSessionDetailsForFrontend() {
+        Counter counter = new Counter();
+        counter.setCounterId(1L);
+
+        CashSession session = openSession("1000.00");
+        session.setStatus("CLOSED");
+        session.setClosingCash(new BigDecimal("1250.00"));
+        session.setExpectedCash(new BigDecimal("1250.00"));
+        session.setCashDifference(BigDecimal.ZERO);
+        CashSessionTransaction cashSale = transaction("SALE", "250.00", "CASH");
+
+        when(counterRepository.findById(1L)).thenReturn(Optional.of(counter));
+        when(cashSessionRepository.findTopByCounterIdAndStatusOrderByOpenedAtDesc(1L, "CLOSED"))
+                .thenReturn(Optional.of(session));
+        when(cashSessionRepository.findById(10L)).thenReturn(Optional.of(session));
+        when(transactionRepository.findBySessionIdOrderByCreatedAtDesc(10L)).thenReturn(List.of(cashSale));
+        when(orderRepository.findByCashSessionIdOrderByOrderDateDesc(10L)).thenReturn(List.of());
+        when(denominationRepository.findBySessionIdAndType(10L, "OPENING")).thenReturn(List.of());
+        when(denominationRepository.findBySessionIdAndType(10L, "CLOSING")).thenReturn(List.of());
+        when(expenseRepository.findByCashSessionIdOrderByExpenseDateDesc(10L)).thenReturn(List.of());
+        when(withdrawalRepository.findByCashSessionIdOrderByWithdrawalDateDesc(10L)).thenReturn(List.of());
+
+        PreviousCashSessionResponse response = cashService.getPreviousSessionByCounter(1L);
+
+        assertThat(response.getBalance()).isEqualByComparingTo("1250.00");
+        assertThat(response.getSession().getSessionId()).isEqualTo(10L);
+        assertThat(response.getSession().getStatus()).isEqualTo("CLOSED");
+        assertThat(response.getSummary().getExpectedCash()).isEqualByComparingTo("1250.00");
+        assertThat(response.getTransactions()).hasSize(1);
+        assertThat(response.getExpenses()).isEmpty();
+        assertThat(response.getWithdrawals()).isEmpty();
+    }
+
     private CashSession openSession(String openingCash) {
         CashSession session = new CashSession();
         session.setSessionId(10L);
@@ -150,6 +229,13 @@ class CashServiceImplTest {
         session.setOpeningCash(new BigDecimal(openingCash));
         session.setStatus("OPEN");
         return session;
+    }
+
+    private User user(Long userId, String fullName) {
+        User user = new User();
+        user.setUserId(userId);
+        user.setFullName(fullName);
+        return user;
     }
 
     private CustomerOrder completedOrder(String total) {

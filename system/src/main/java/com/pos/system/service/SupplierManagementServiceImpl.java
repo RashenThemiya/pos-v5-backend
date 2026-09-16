@@ -3,6 +3,7 @@ package com.pos.system.service;
 import com.pos.system.dto.supplier.*;
 import com.pos.system.model.cash.CashSession;
 import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.cash.Counter;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ItemVariant;
@@ -17,14 +18,20 @@ import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 import java.math.RoundingMode;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -65,6 +72,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private final CashSessionRepository cashSessionRepository;
     private final CashSessionTransactionRepository cashSessionTransactionRepository;
+    private final CounterRepository counterRepository;
     private final CustomerOrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
 
@@ -309,56 +317,37 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
 
     @Override
     public PurchaseOrderResponseDto getPurchaseOrderById(Long poId) {
+        purchaseOrderItemRepository.flush();
+        supplierPaymentRepository.flush();
+        supplyRepository.flush();
+
         PurchaseOrder po = purchaseOrderRepository.findById(poId)
                 .orElseThrow(() -> new RuntimeException("Purchase order not found"));
-
-        List<PurchaseOrderItemResponseDto> items = purchaseOrderItemRepository.findByPoId(poId)
+        PurchaseOrderResponseDto response = mapPurchaseOrderListRows(List.of(po)).stream()
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Purchase order not found"));
+        List<SupplyResponseDto> receipts = supplyRepository.findByPoId(poId)
                 .stream()
-                .map(item -> {
-                    ItemUnit unit = findItemUnit(item.getItemId(), item.getUnitId());
-                    return PurchaseOrderItemResponseDto.builder()
-                            .poItemId(item.getPoItemId())
-                            .poId(item.getPoId())
-                            .itemId(item.getItemId())
-                            .variantId(item.getVariantId())
-                            .variantSku(resolveVariantSku(item.getVariantId()))
-                            .variantLabel(resolveVariantLabel(item.getVariantId()))
-                            .unitId(item.getUnitId())
-                            .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
-                            .unitName(resolveUnitName(unit))
-                            .orderedQty(item.getOrderedQty())
-                            .receivedQty(item.getReceivedQty())
-                            .remainingQty(nvlQty(item.getOrderedQty()).subtract(nvlQty(item.getReceivedQty())).max(BigDecimal.ZERO))
-                            .unitCostEst(item.getUnitCostEst())
-                            .build();
-                })
+                .map(supply -> getSupplyById(supply.getSupplyId()))
                 .toList();
-        BigDecimal totalAmount = items.stream()
-                .map(item -> nvlQty(item.getOrderedQty()).multiply(nvlMoney(item.getUnitCostEst())))
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-        BigDecimal paidAmount = calculatePurchaseOrderPaidAmount(poId);
-        BigDecimal balanceAmount = totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
+        List<SupplierPaymentResponseDto> payments = supplierPaymentRepository.findByPoId(poId)
+                .stream()
+                .map(this::mapSupplierPayment)
+                .toList();
+        List<Long> receiptIds = receipts.stream()
+                .map(SupplyResponseDto::getSupplyId)
+                .toList();
+        List<PurchaseReturnResponseDto> purchaseReturns = receiptIds.isEmpty()
+                ? List.of()
+                : purchaseReturnRepository.findBySupplyIdInOrderByReturnDateDesc(receiptIds)
+                .stream()
+                .map(purchaseReturn -> getPurchaseReturnById(purchaseReturn.getPurchaseReturnId()))
+                .toList();
 
-        return PurchaseOrderResponseDto.builder()
-                .poId(po.getPoId())
-                .branchId(po.getBranchId())
-                .supplierId(po.getSupplierId())
-                .supplierName(supplierRepository.findById(po.getSupplierId())
-                        .map(Supplier::getName).orElse(null))
-                .poNo(po.getPoNo())
-                .status(po.getStatus())
-                .expectedDate(po.getExpectedDate())
-                .createdBy(po.getCreatedBy())
-                .createdByName(resolveUserName(po.getCreatedBy()))
-                .createdAt(po.getCreatedAt())
-                .note(po.getNote())
-                .totalAmount(totalAmount)
-                .paidAmount(paidAmount)
-                .balanceAmount(balanceAmount)
-                .receivingStatus(resolvePurchaseOrderReceivingStatus(items, po.getStatus()))
-                .paymentStatus(resolvePaymentStatus(totalAmount, paidAmount))
-                .items(items)
-                .build();
+        response.setReceipts(receipts);
+        response.setPayments(payments);
+        response.setPurchaseReturns(purchaseReturns);
+        return response;
     }
 
     @Override
@@ -373,6 +362,406 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     public List<PurchaseOrderResponseDto> getPurchaseOrdersByItem(Long branchId, Long itemId) {
         return purchaseOrderRepository.findByBranchIdAndItemId(branchId, itemId)
                 .stream().map(po -> getPurchaseOrderById(po.getPoId())).toList();
+    }
+
+    @Override
+    public PurchaseOrderPageResponseDto searchPurchaseOrdersByBranch(
+            Long branchId,
+            PurchaseOrderSearchRequestDto request,
+            Pageable pageable
+    ) {
+        PurchaseOrderSearchRequestDto filters = request != null ? request : new PurchaseOrderSearchRequestDto();
+        purchaseOrderItemRepository.flush();
+        supplierPaymentRepository.flush();
+        supplyRepository.flush();
+
+        List<PurchaseOrder> candidates = purchaseOrderRepository.findAll(buildPurchaseOrderSearchSpecification(branchId, filters));
+        List<PurchaseOrderResponseDto> rows = mapPurchaseOrderListRows(candidates);
+
+        rows = rows.stream()
+                .filter(row -> matchesStatusFilter(row.getStatus(), filters.getStatus()))
+                .filter(row -> matchesExactStatus(row.getReceivingStatus(), filters.getReceivingStatus()))
+                .filter(row -> matchesExactStatus(row.getPaymentStatus(), filters.getPaymentStatus()))
+                .toList();
+
+        PurchaseOrderSummaryDto summary = buildPurchaseOrderSummary(rows);
+        List<PurchaseOrderResponseDto> sortedRows = new ArrayList<>(rows);
+        sortedRows.sort(buildPurchaseOrderComparator(pageable));
+
+        int pageSize = pageable.getPageSize() > 0 ? pageable.getPageSize() : 25;
+        int pageNumber = Math.max(pageable.getPageNumber(), 0);
+        int fromIndex = Math.min(pageNumber * pageSize, sortedRows.size());
+        int toIndex = Math.min(fromIndex + pageSize, sortedRows.size());
+
+        return PurchaseOrderPageResponseDto.builder()
+                .content(sortedRows.subList(fromIndex, toIndex))
+                .page(pageNumber)
+                .pageSize(pageSize)
+                .totalElements(sortedRows.size())
+                .totalPages(pageSize == 0 ? 0 : (int) Math.ceil((double) sortedRows.size() / pageSize))
+                .sort(formatPageSort(pageable))
+                .summary(summary)
+                .build();
+    }
+
+    private Specification<PurchaseOrder> buildPurchaseOrderSearchSpecification(
+            Long branchId,
+            PurchaseOrderSearchRequestDto request
+    ) {
+        return (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("branchId"), branchId));
+
+            if (request.getSupplierId() != null) {
+                predicates.add(cb.equal(root.get("supplierId"), request.getSupplierId()));
+            }
+
+            if (request.getDateFrom() != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), request.getDateFrom().atStartOfDay()));
+            }
+
+            if (request.getDateTo() != null) {
+                predicates.add(cb.lessThan(root.get("createdAt"), request.getDateTo().plusDays(1).atStartOfDay()));
+            }
+
+            if (StringUtils.hasText(request.getQ())) {
+                String pattern = "%" + request.getQ().trim().toLowerCase() + "%";
+
+                var supplierSubquery = query.subquery(Long.class);
+                var supplierRoot = supplierSubquery.from(Supplier.class);
+                supplierSubquery.select(supplierRoot.get("supplierId"))
+                        .where(
+                                cb.equal(supplierRoot.get("supplierId"), root.get("supplierId")),
+                                cb.or(
+                                        cb.like(cb.lower(supplierRoot.get("name")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("contactPerson")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("phone")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("email")), pattern)
+                                )
+                        );
+
+                var itemSubquery = query.subquery(Long.class);
+                var lineRoot = itemSubquery.from(PurchaseOrderItem.class);
+                var itemRoot = itemSubquery.from(Item.class);
+                itemSubquery.select(lineRoot.get("poItemId"))
+                        .where(
+                                cb.equal(lineRoot.get("poId"), root.get("poId")),
+                                cb.equal(lineRoot.get("itemId"), itemRoot.get("itemId")),
+                                cb.or(
+                                        cb.like(cb.lower(itemRoot.get("name")), pattern),
+                                        cb.like(cb.lower(itemRoot.get("sku")), pattern)
+                                )
+                        );
+
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("poNo")), pattern),
+                        cb.like(cb.lower(root.get("status")), pattern),
+                        cb.like(cb.lower(root.get("note")), pattern),
+                        cb.exists(supplierSubquery),
+                        cb.exists(itemSubquery)
+                ));
+            }
+
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
+    }
+
+    private List<PurchaseOrderResponseDto> mapPurchaseOrderListRows(List<PurchaseOrder> purchaseOrders) {
+        if (purchaseOrders == null || purchaseOrders.isEmpty()) {
+            return List.of();
+        }
+
+        List<Long> poIds = purchaseOrders.stream().map(PurchaseOrder::getPoId).toList();
+        Map<Long, List<PurchaseOrderItem>> itemsByPoId = groupByPoId(purchaseOrderItemRepository.findByPoIdIn(poIds));
+        Map<Long, List<Supply>> suppliesByPoId = groupSuppliesByPoId(supplyRepository.findByPoIdIn(poIds));
+        Map<Long, List<SupplierPayment>> paymentsByPoId = groupPaymentsByPoId(supplierPaymentRepository.findByPoIdIn(poIds));
+        if (purchaseOrders.size() == 1) {
+            Long poId = purchaseOrders.get(0).getPoId();
+            itemsByPoId.computeIfAbsent(poId, id -> purchaseOrderItemRepository.findByPoId(id));
+            suppliesByPoId.computeIfAbsent(poId, id -> supplyRepository.findByPoId(id));
+            paymentsByPoId.computeIfAbsent(poId, id -> supplierPaymentRepository.findByPoId(id));
+        }
+
+        Map<Long, Supplier> suppliersById = new LinkedHashMap<>();
+        supplierRepository.findAllById(
+                purchaseOrders.stream().map(PurchaseOrder::getSupplierId).filter(id -> id != null).distinct().toList()
+        ).forEach(supplier -> suppliersById.put(supplier.getSupplierId(), supplier));
+
+        Set<Long> itemIds = new HashSet<>();
+        Set<Long> unitIds = new HashSet<>();
+        Set<Long> variantIds = new HashSet<>();
+        itemsByPoId.values().forEach(items -> items.forEach(item -> {
+            if (item.getItemId() != null) itemIds.add(item.getItemId());
+            if (item.getUnitId() != null) unitIds.add(item.getUnitId());
+            if (item.getVariantId() != null) variantIds.add(item.getVariantId());
+        }));
+
+        Map<Long, Item> catalogItemsById = new LinkedHashMap<>();
+        itemRepository.findAllById(itemIds).forEach(item -> catalogItemsById.put(item.getItemId(), item));
+
+        Map<Long, ItemUnit> unitsById = new LinkedHashMap<>();
+        itemUnitRepository.findAllById(unitIds).forEach(unit -> unitsById.put(unit.getUnitId(), unit));
+
+        Map<Long, UnitMaster> masterUnitsById = new LinkedHashMap<>();
+        unitMasterRepository.findAllById(
+                unitsById.values().stream().map(ItemUnit::getMasterUnitId).filter(id -> id != null).distinct().toList()
+        ).forEach(unit -> masterUnitsById.put(unit.getUnitId(), unit));
+
+        Map<Long, ItemVariant> variantsById = new LinkedHashMap<>();
+        itemVariantRepository.findAllById(variantIds).forEach(variant -> variantsById.put(variant.getVariantId(), variant));
+
+        Map<Long, String> variantLabelsById = buildVariantLabelMap(variantIds, variantsById);
+
+        List<PurchaseOrderResponseDto> rows = new ArrayList<>();
+        for (PurchaseOrder po : purchaseOrders) {
+            List<PurchaseOrderItemResponseDto> itemDtos = (itemsByPoId.getOrDefault(po.getPoId(), List.of()))
+                    .stream()
+                    .map(item -> mapPurchaseOrderItemForList(item, catalogItemsById, unitsById, masterUnitsById, variantsById, variantLabelsById))
+                    .toList();
+            BigDecimal totalAmount = itemDtos.stream()
+                    .map(item -> nvlQty(item.getOrderedQty()).multiply(nvlMoney(item.getUnitCostEst())))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal orderedQuantity = itemDtos.stream()
+                    .map(item -> nvlQty(item.getOrderedQty()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal receivedQuantity = itemDtos.stream()
+                    .map(item -> nvlQty(item.getReceivedQty()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal remainingQuantity = itemDtos.stream()
+                    .map(item -> nvlQty(item.getRemainingQty()))
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal paidAmount = calculatePurchaseOrderPaidAmount(
+                    po.getPoId(),
+                    paymentsByPoId.getOrDefault(po.getPoId(), List.of()),
+                    suppliesByPoId.getOrDefault(po.getPoId(), List.of())
+            );
+            BigDecimal balanceAmount = totalAmount.subtract(paidAmount).max(BigDecimal.ZERO);
+            String receivingStatus = resolvePurchaseOrderReceivingStatus(itemDtos, po.getStatus());
+            Supplier supplier = suppliersById.get(po.getSupplierId());
+
+            rows.add(PurchaseOrderResponseDto.builder()
+                    .poId(po.getPoId())
+                    .branchId(po.getBranchId())
+                    .supplierId(po.getSupplierId())
+                    .supplierName(supplier != null ? supplier.getName() : null)
+                    .supplierContactPerson(supplier != null ? supplier.getContactPerson() : null)
+                    .supplierPhone(supplier != null ? supplier.getPhone() : null)
+                    .supplierEmail(supplier != null ? supplier.getEmail() : null)
+                    .supplierAddress(supplier != null ? supplier.getAddress() : null)
+                    .poNo(po.getPoNo())
+                    .status(po.getStatus())
+                    .orderDate(po.getCreatedAt() != null ? po.getCreatedAt().toLocalDate() : null)
+                    .expectedDate(po.getExpectedDate())
+                    .createdBy(po.getCreatedBy())
+                    .createdAt(po.getCreatedAt())
+                    .note(po.getNote())
+                    .totalAmount(totalAmount)
+                    .paidAmount(paidAmount)
+                    .balanceAmount(balanceAmount)
+                    .receivingStatus(receivingStatus)
+                    .paymentStatus(resolvePaymentStatus(totalAmount, paidAmount))
+                    .itemCount(itemDtos.size())
+                    .orderedQuantity(orderedQuantity)
+                    .receivedQuantity(receivedQuantity)
+                    .remainingQuantity(remainingQuantity)
+                    .overdue(isPurchaseOrderOverdue(po.getExpectedDate(), receivingStatus, po.getStatus()))
+                    .items(itemDtos)
+                    .build());
+        }
+
+        return rows;
+    }
+
+    private PurchaseOrderItemResponseDto mapPurchaseOrderItemForList(
+            PurchaseOrderItem item,
+            Map<Long, Item> catalogItemsById,
+            Map<Long, ItemUnit> unitsById,
+            Map<Long, UnitMaster> masterUnitsById,
+            Map<Long, ItemVariant> variantsById,
+            Map<Long, String> variantLabelsById
+    ) {
+        Item catalogItem = catalogItemsById.get(item.getItemId());
+        ItemUnit unit = unitsById.get(item.getUnitId());
+        ItemVariant variant = variantsById.get(item.getVariantId());
+        String unitName = null;
+        if (unit != null) {
+            UnitMaster masterUnit = masterUnitsById.get(unit.getMasterUnitId());
+            unitName = masterUnit != null ? masterUnit.getName() : unit.getUnitName();
+        }
+
+        return PurchaseOrderItemResponseDto.builder()
+                .poItemId(item.getPoItemId())
+                .poId(item.getPoId())
+                .itemId(item.getItemId())
+                .itemName(catalogItem != null ? catalogItem.getName() : null)
+                .itemImage(catalogItem != null ? catalogItem.getImage() : null)
+                .sku(catalogItem != null ? catalogItem.getSku() : null)
+                .variantId(item.getVariantId())
+                .variantSku(variant != null ? variant.getSku() : null)
+                .variantLabel(variantLabelsById.get(item.getVariantId()))
+                .variantImage(variant != null ? variant.getImage() : null)
+                .unitId(item.getUnitId())
+                .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
+                .unitName(unitName)
+                .orderedQty(item.getOrderedQty())
+                .receivedQty(item.getReceivedQty())
+                .remainingQty(nvlQty(item.getOrderedQty()).subtract(nvlQty(item.getReceivedQty())).max(BigDecimal.ZERO))
+                .unitCostEst(item.getUnitCostEst())
+                .build();
+    }
+
+    private Map<Long, List<PurchaseOrderItem>> groupByPoId(List<PurchaseOrderItem> items) {
+        Map<Long, List<PurchaseOrderItem>> grouped = new LinkedHashMap<>();
+        for (PurchaseOrderItem item : items) {
+            grouped.computeIfAbsent(item.getPoId(), id -> new ArrayList<>()).add(item);
+        }
+        return grouped;
+    }
+
+    private Map<Long, List<Supply>> groupSuppliesByPoId(List<Supply> supplies) {
+        Map<Long, List<Supply>> grouped = new LinkedHashMap<>();
+        for (Supply supply : supplies) {
+            if (supply.getPoId() == null) continue;
+            grouped.computeIfAbsent(supply.getPoId(), id -> new ArrayList<>()).add(supply);
+        }
+        return grouped;
+    }
+
+    private Map<Long, List<SupplierPayment>> groupPaymentsByPoId(List<SupplierPayment> payments) {
+        Map<Long, List<SupplierPayment>> grouped = new LinkedHashMap<>();
+        for (SupplierPayment payment : payments) {
+            if (payment.getPoId() == null) continue;
+            grouped.computeIfAbsent(payment.getPoId(), id -> new ArrayList<>()).add(payment);
+        }
+        return grouped;
+    }
+
+    private Map<Long, String> buildVariantLabelMap(Collection<Long> variantIds, Map<Long, ItemVariant> variantsById) {
+        Map<Long, List<String>> attributesByVariant = new LinkedHashMap<>();
+        if (variantIds != null && !variantIds.isEmpty()) {
+            itemVariantAttributeRepository.findByVariantIdIn(variantIds)
+                    .stream()
+                    .sorted(Comparator.comparing(attribute -> safe(attribute.getAttributeName())))
+                    .forEach(attribute -> attributesByVariant
+                            .computeIfAbsent(attribute.getVariantId(), id -> new ArrayList<>())
+                            .add(attribute.getAttributeName() + ": " + attribute.getAttributeValue()));
+        }
+
+        Map<Long, String> labelsByVariant = new LinkedHashMap<>();
+        for (Long variantId : variantIds) {
+            List<String> attributes = attributesByVariant.getOrDefault(variantId, List.of());
+            String label = String.join(" / ", attributes);
+            if (label.isBlank()) {
+                ItemVariant variant = variantsById.get(variantId);
+                label = variant != null ? variant.getSku() : null;
+            }
+            labelsByVariant.put(variantId, label);
+        }
+        return labelsByVariant;
+    }
+
+    private BigDecimal calculatePurchaseOrderPaidAmount(Long poId, List<SupplierPayment> payments, List<Supply> supplies) {
+        BigDecimal directPoPayments = payments
+                .stream()
+                .filter(payment -> payment.getSupplyId() == null)
+                .map(payment -> nvlMoney(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal supplyPayments = supplies
+                .stream()
+                .filter(supply -> !"CANCELLED".equalsIgnoreCase(supply.getStatus()))
+                .filter(supply -> !"VOID".equalsIgnoreCase(supply.getStatus()))
+                .filter(supply -> !"VOIDED".equalsIgnoreCase(supply.getStatus()))
+                .map(supply -> nvlMoney(supply.getPaidAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return directPoPayments.add(supplyPayments);
+    }
+
+    private boolean matchesStatusFilter(String status, String filter) {
+        if (!StringUtils.hasText(filter) || "ALL".equalsIgnoreCase(filter)) {
+            return true;
+        }
+
+        String normalizedStatus = safe(status).toUpperCase();
+        String normalizedFilter = filter.trim().toUpperCase();
+
+        if ("OPEN".equals(normalizedFilter) || "PENDING".equals(normalizedFilter)) {
+            return "OPEN".equals(normalizedStatus)
+                    || "PENDING".equals(normalizedStatus)
+                    || "PARTIAL".equals(normalizedStatus);
+        }
+
+        return normalizedStatus.equals(normalizedFilter);
+    }
+
+    private boolean matchesExactStatus(String status, String filter) {
+        return !StringUtils.hasText(filter)
+                || "ALL".equalsIgnoreCase(filter)
+                || safe(status).equalsIgnoreCase(filter.trim());
+    }
+
+    private PurchaseOrderSummaryDto buildPurchaseOrderSummary(List<PurchaseOrderResponseDto> rows) {
+        return PurchaseOrderSummaryDto.builder()
+                .total(rows.size())
+                .draft(rows.stream().filter(row -> "DRAFT".equalsIgnoreCase(row.getStatus())).count())
+                .open(rows.stream().filter(row -> matchesStatusFilter(row.getStatus(), "OPEN")).count())
+                .partiallyReceived(rows.stream().filter(row -> "PARTIALLY_RECEIVED".equalsIgnoreCase(row.getReceivingStatus())).count())
+                .fullyReceived(rows.stream().filter(row -> "FULLY_RECEIVED".equalsIgnoreCase(row.getReceivingStatus())).count())
+                .overdue(rows.stream().filter(row -> Boolean.TRUE.equals(row.getOverdue())).count())
+                .build();
+    }
+
+    private Comparator<PurchaseOrderResponseDto> buildPurchaseOrderComparator(Pageable pageable) {
+        List<Sort.Order> orders = pageable.getSort().stream().toList();
+        if (orders.isEmpty()) {
+            orders = List.of(Sort.Order.desc("createdAt"));
+        }
+
+        Comparator<PurchaseOrderResponseDto> comparator = null;
+        for (Sort.Order order : orders) {
+            Comparator<PurchaseOrderResponseDto> next = comparatorForPurchaseOrderSort(order.getProperty());
+            if (order.isDescending()) {
+                next = next.reversed();
+            }
+            comparator = comparator == null ? next : comparator.thenComparing(next);
+        }
+
+        return comparator != null ? comparator : comparatorForPurchaseOrderSort("createdAt").reversed();
+    }
+
+    private Comparator<PurchaseOrderResponseDto> comparatorForPurchaseOrderSort(String property) {
+        return switch (property) {
+            case "poNo" -> Comparator.comparing(row -> safe(row.getPoNo()), String.CASE_INSENSITIVE_ORDER);
+            case "supplier", "supplierName" -> Comparator.comparing(row -> safe(row.getSupplierName()), String.CASE_INSENSITIVE_ORDER);
+            case "expectedDate" -> Comparator.comparing(PurchaseOrderResponseDto::getExpectedDate, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "orderDate" -> Comparator.comparing(PurchaseOrderResponseDto::getOrderDate, Comparator.nullsLast(Comparator.naturalOrder()));
+            case "totalAmount" -> Comparator.comparing(row -> nvlMoney(row.getTotalAmount()));
+            case "receivingStatus" -> Comparator.comparing(row -> safe(row.getReceivingStatus()), String.CASE_INSENSITIVE_ORDER);
+            case "paymentStatus" -> Comparator.comparing(row -> safe(row.getPaymentStatus()), String.CASE_INSENSITIVE_ORDER);
+            case "status" -> Comparator.comparing(row -> safe(row.getStatus()), String.CASE_INSENSITIVE_ORDER);
+            default -> Comparator.comparing(PurchaseOrderResponseDto::getCreatedAt, Comparator.nullsLast(Comparator.naturalOrder()));
+        };
+    }
+
+    private String formatPageSort(Pageable pageable) {
+        if (pageable.getSort().isUnsorted()) {
+            return "createdAt,DESC";
+        }
+        return String.join(";",
+                pageable.getSort().stream()
+                        .map(order -> order.getProperty() + "," + order.getDirection().name())
+                        .toList());
+    }
+
+    private boolean isPurchaseOrderOverdue(LocalDate expectedDate, String receivingStatus, String poStatus) {
+        if (expectedDate == null) {
+            return false;
+        }
+        if ("CANCELLED".equalsIgnoreCase(poStatus) || "FULLY_RECEIVED".equalsIgnoreCase(receivingStatus)) {
+            return false;
+        }
+        return expectedDate.isBefore(LocalDate.now());
     }
 
     // =========================
@@ -1517,11 +1906,13 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         BigDecimal expenses = sumCashTransactionsByType(txns, "EXPENSE");
         BigDecimal withdrawals = sumCashTransactionsByType(txns, "WITHDRAWAL");
         BigDecimal cashRefunds = sumCashTransactionsByTypeAndCashMethod(txns, "REFUND");
+        BigDecimal customerPayments = sumCashTransactionsByTypes(txns, "CUSTOMER_PAYMENT_IN");
         BigDecimal supplierPayments = sumCashTransactionsByTypes(txns, "SUPPLIER_PAYMENT", "SUPPLIER_PAYMENT_OUT");
-        BigDecimal supplierRefunds = sumCashTransactionsByType(txns, "SUPPLIER_REFUND_IN");
+        BigDecimal supplierRefunds = sumCashTransactionsByTypes(txns, "SUPPLIER_REFUND_IN", "PURCHASE_RETURN_CASH_REFUND");
 
         return nvlMoney(cashSession.getOpeningCash())
                 .add(cashSales)
+                .add(customerPayments)
                 .add(supplierRefunds)
                 .subtract(expenses)
                 .subtract(withdrawals)
@@ -1692,6 +2083,7 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
     PurchaseReturn purchaseReturn = new PurchaseReturn();
     String refundMethod = dto.getRefundMethod() != null ? dto.getRefundMethod() : "BALANCE_ADJUSTMENT";
     Long cashSessionId = null;
+    Long cashCounterId = null;
 
     if (isBankRefundMethod(refundMethod) && isBlank(dto.getBankReference())) {
         throw new RuntimeException("Bank reference is required for bank refund");
@@ -1709,7 +2101,19 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
             throw new RuntimeException("Cash session is not OPEN");
         }
 
+        if (dto.getCounterId() != null && !cashSession.getCounterId().equals(dto.getCounterId())) {
+            throw new RuntimeException("Cash session does not belong to the selected counter");
+        }
+
+        Counter counter = counterRepository.findById(cashSession.getCounterId())
+                .orElseThrow(() -> new RuntimeException("Counter not found"));
+
+        if (!counter.getBranchId().equals(dto.getBranchId())) {
+            throw new RuntimeException("Cash session counter does not belong to this branch");
+        }
+
         cashSessionId = cashSession.getSessionId();
+        cashCounterId = cashSession.getCounterId();
     }
 
     purchaseReturn.setBranchId(dto.getBranchId());
@@ -1788,11 +2192,15 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
         if (isCashRefundMethod(savedReturn.getRefundMethod())) {
             CashSessionTransaction cashTxn = new CashSessionTransaction();
             cashTxn.setSessionId(savedReturn.getCashSessionId());
-            cashTxn.setType("SUPPLIER_REFUND_IN");
+            cashTxn.setType("PURCHASE_RETURN_CASH_REFUND");
             cashTxn.setAmount(refundAmount);
             cashTxn.setPaymentMethod("CASH");
             cashTxn.setPurchaseReturnId(savedReturn.getPurchaseReturnId());
-            cashTxn.setNote("Supplier cash refund: " + supplier.getName());
+            cashTxn.setSupplierId(savedReturn.getSupplierId());
+            cashTxn.setSupplyId(savedReturn.getSupplyId());
+            cashTxn.setCounterId(cashCounterId);
+            cashTxn.setReferenceNo(dto.getSupplyId() != null ? "Supply #" + dto.getSupplyId() : null);
+            cashTxn.setNote(buildPurchaseReturnCashRefundNote(savedReturn, supplier));
             cashTxn.setCreatedBy(processedBy);
             cashTxn.setCreatedAt(LocalDateTime.now());
             cashSessionTransactionRepository.save(cashTxn);
@@ -2184,6 +2592,25 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
         return note;
     }
 
+    private String buildPurchaseReturnCashRefundNote(PurchaseReturn purchaseReturn, Supplier supplier) {
+        String note = "Purchase return cash refund"
+                + " | Purchase Return #" + purchaseReturn.getPurchaseReturnId()
+                + " | Supplier: " + supplier.getName()
+                + " (#" + purchaseReturn.getSupplierId() + ")"
+                + " | Supply #" + purchaseReturn.getSupplyId()
+                + " | Reason: " + safe(purchaseReturn.getReason());
+        return note;
+    }
+
+    private Long resolveCashSessionCounterId(Long cashSessionId) {
+        if (cashSessionId == null) {
+            return null;
+        }
+        return cashSessionRepository.findById(cashSessionId)
+                .map(CashSession::getCounterId)
+                .orElse(null);
+    }
+
     private PurchaseReturnResponseDto mapPurchaseReturn(
         PurchaseReturn purchaseReturn,
         List<PurchaseReturnItemResponseDto> items
@@ -2195,6 +2622,7 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
             .supplyId(purchaseReturn.getSupplyId())
             .returnDate(purchaseReturn.getReturnDate())
             .refundMethod(purchaseReturn.getRefundMethod())
+            .counterId(resolveCashSessionCounterId(purchaseReturn.getCashSessionId()))
             .cashSessionId(purchaseReturn.getCashSessionId())
             .bankReference(purchaseReturn.getBankReference())
             .refundAmount(purchaseReturn.getRefundAmount())

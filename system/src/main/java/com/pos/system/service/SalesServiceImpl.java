@@ -18,6 +18,8 @@ import com.pos.system.model.stock.StockMovement;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -96,6 +98,7 @@ public class SalesServiceImpl implements SalesService {
         CustomerOrder order = new CustomerOrder();
         order.setBranchId(request.getBranchId());
         order.setInvoiceNo(generateInvoiceNo(request.getBranchId()));
+        order.setOrderNo(generateOrderNo(request.getBranchId()));
         order.setUserId(request.getUserId());
         order.setCustomerId(request.getCustomerId());
         order.setCashSessionId(request.getCashSessionId());
@@ -171,6 +174,20 @@ public class SalesServiceImpl implements SalesService {
     public List<OrderResponse> getOrdersByBranch(Long branchId) {
         return orderRepository.findByBranchIdOrderByOrderDateDesc(branchId)
                 .stream().map(this::buildOrderResponse).toList();
+    }
+
+    @Override
+    public CustomerOrderPageResponse getCustomerOrdersByBranch(Long branchId, Long customerId, Pageable pageable) {
+        Page<CustomerOrder> orders = orderRepository.findByBranchIdAndCustomerId(branchId, customerId, pageable);
+
+        return CustomerOrderPageResponse.builder()
+                .content(orders.getContent().stream().map(this::buildCustomerOrderViewResponse).toList())
+                .page(orders.getNumber())
+                .pageSize(orders.getSize())
+                .totalElements(orders.getTotalElements())
+                .totalPages(orders.getTotalPages())
+                .sort(formatPageSort(pageable))
+                .build();
     }
 
     @Override
@@ -685,17 +702,18 @@ public class SalesServiceImpl implements SalesService {
                 .units(units.stream().map(this::mapSearchUnit).toList())
                 .variants(variants.stream().map(this::mapSearchVariant).toList())
                 .batches(batches.stream().map(this::mapSearchBatch).toList())
-                .promotions(findSalePromotions(item, matchedBatch))
+                .promotions(findSalePromotions(item, variantId, matchedBatch))
                 .build();
     }
 
-    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, StockBatch matchedBatch) {
+    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, Long variantId, StockBatch matchedBatch) {
         List<SaleProductSearchResponse.PromotionDto> result = new ArrayList<>();
         List<Promotion> activePromotions = promotionRepository.findActiveByBranchIdAndNow(item.getBranchId(), LocalDateTime.now());
 
         for (Promotion promotion : activePromotions) {
             promotionItemRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
                     .filter(promotionItem -> promotionItem.getItemId().equals(item.getItemId()))
+                    .filter(promotionItem -> promotionItem.getVariantId() == null || promotionItem.getVariantId().equals(variantId))
                     .forEach(promotionItem -> result.add(mapSearchPromotion(promotion, promotionItem, null)));
 
             if (matchedBatch != null) {
@@ -729,6 +747,7 @@ public class SalesServiceImpl implements SalesService {
                 .promotionItemId(promotionItem != null ? promotionItem.getId() : null)
                 .promotionBatchId(promotionBatch != null ? promotionBatch.getId() : null)
                 .unitId(promotionItem != null ? promotionItem.getUnitId() : null)
+                .variantId(promotionItem != null ? promotionItem.getVariantId() : null)
                 .batchBarcode(promotionBatch != null ? promotionBatch.getBarcode() : null)
                 .maxQty(promotionItem != null ? promotionItem.getMaxQty() : promotionBatch.getMaxQty())
                 .usedQty(promotionItem != null ? promotionItem.getUsedQty() : promotionBatch.getUsedQty())
@@ -934,6 +953,26 @@ public class SalesServiceImpl implements SalesService {
         return invoiceNo;
     }
 
+    private String generateOrderNo(Long branchId) {
+        String prefix = "SO-" + branchId + "-";
+        String datePart = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        String orderNo = prefix + datePart + "-" + uniquePart;
+
+        while (orderRepository.existsByOrderNo(orderNo)) {
+            uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+            orderNo = prefix + datePart + "-" + uniquePart;
+        }
+        return orderNo;
+    }
+
+    private String resolveOrderNo(CustomerOrder order) {
+        if (order.getOrderNo() != null && !order.getOrderNo().isBlank()) {
+            return order.getOrderNo();
+        }
+        return order.getOrderId() != null ? String.format("SO-%03d", order.getOrderId()) : null;
+    }
+
     private void recordStatusHistory(Long orderId, String oldStatus, String newStatus, Long changedBy, String note) {
         OrderStatusHistory history = new OrderStatusHistory();
         history.setOrderId(orderId);
@@ -972,6 +1011,7 @@ public class SalesServiceImpl implements SalesService {
                 .orderId(order.getOrderId())
                 .branchId(order.getBranchId())
                 .invoiceNo(order.getInvoiceNo())
+                .orderNo(resolveOrderNo(order))
                 .userId(order.getUserId())
                 .customerId(order.getCustomerId())
                 .cashSessionId(order.getCashSessionId())
@@ -987,6 +1027,70 @@ public class SalesServiceImpl implements SalesService {
                 .items(items)
                 .payments(payments)
                 .build();
+    }
+
+    private CustomerOrderViewResponse buildCustomerOrderViewResponse(CustomerOrder order) {
+        List<OrderProduct> products = orderProductRepository.findByOrderId(order.getOrderId());
+        List<CustomerOrderItemResponse> items = products.stream()
+                .map(this::mapCustomerOrderItem)
+                .toList();
+        BigDecimal itemCount = products.stream()
+                .map(product -> nvl(product.getQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        return CustomerOrderViewResponse.builder()
+                .orderId(order.getOrderId())
+                .invoiceNo(order.getInvoiceNo())
+                .orderNo(resolveOrderNo(order))
+                .createdAt(order.getOrderDate())
+                .paymentMethod(resolvePaymentMethod(order.getOrderId()))
+                .items(items)
+                .itemCount(itemCount)
+                .totalAmount(order.getTotal())
+                .status(order.getStatus())
+                .build();
+    }
+
+    private CustomerOrderItemResponse mapCustomerOrderItem(OrderProduct op) {
+        String itemName = itemRepository.findById(op.getItemId())
+                .map(Item::getName)
+                .orElse(null);
+        ItemUnit unit = itemUnitRepository.findById(op.getUnitId()).orElse(null);
+
+        return CustomerOrderItemResponse.builder()
+                .itemId(op.getItemId())
+                .variantId(op.getVariantId())
+                .variantSku(resolveVariantSku(op.getVariantId()))
+                .variantLabel(resolveVariantLabel(op.getVariantId()))
+                .itemName(itemName)
+                .quantity(op.getQuantity())
+                .unitName(resolveUnitName(unit))
+                .unitPrice(op.getUnitPrice())
+                .lineTotal(op.getLineTotal())
+                .build();
+    }
+
+    private String resolvePaymentMethod(Long orderId) {
+        List<String> paymentMethods = paymentRepository.findByOrderId(orderId).stream()
+                .map(Payment::getPaymentMethod)
+                .filter(method -> method != null && !method.isBlank())
+                .distinct()
+                .toList();
+
+        if (paymentMethods.isEmpty()) {
+            return null;
+        }
+        return paymentMethods.size() == 1 ? paymentMethods.get(0) : "MIXED";
+    }
+
+    private String formatPageSort(Pageable pageable) {
+        if (pageable.getSort().isUnsorted()) {
+            return "";
+        }
+        return pageable.getSort().stream()
+                .map(order -> order.getProperty() + "," + order.getDirection().name().toLowerCase())
+                .reduce((left, right) -> left + ";" + right)
+                .orElse("");
     }
 
     private OrderProductResponse mapOrderProduct(OrderProduct op) {

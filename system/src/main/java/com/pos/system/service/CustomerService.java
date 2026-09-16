@@ -2,10 +2,20 @@ package com.pos.system.service;
 
 import com.pos.system.dto.customer.CustomerSearchRequest;
 import com.pos.system.dto.customer.CustomerRequest;
+import com.pos.system.dto.cash.CashSessionTransactionResponse;
+import com.pos.system.dto.customer.CustomerBalanceTransactionResponse;
+import com.pos.system.dto.customer.CustomerPaymentRequest;
+import com.pos.system.dto.customer.CustomerPaymentResponse;
 import com.pos.system.model.auth.Authorization;
+import com.pos.system.model.cash.CashSession;
+import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.cash.Counter;
 import com.pos.system.model.customer.Customer;
 import com.pos.system.model.customer.CustomerBalanceTransaction;
 import com.pos.system.model.customer.LoyaltyTransaction;
+import com.pos.system.repository.CashSessionRepository;
+import com.pos.system.repository.CashSessionTransactionRepository;
+import com.pos.system.repository.CounterRepository;
 import com.pos.system.repository.CustomerRepository;
 import com.pos.system.repository.AuthorizationRepository;
 import com.pos.system.repository.CustomerBalanceTransactionRepository;
@@ -32,6 +42,9 @@ public class CustomerService {
     private final AuthorizationRepository authorizationRepository; 
     private final CustomerBalanceTransactionRepository balanceTransactionRepository;
     private final LoyaltyTransactionRepository loyaltyTransactionRepository;
+    private final CashSessionRepository cashSessionRepository;
+    private final CashSessionTransactionRepository cashSessionTransactionRepository;
+    private final CounterRepository counterRepository;
 
     public Customer create(CustomerRequest request) {
         // Validate unique constraints
@@ -168,6 +181,105 @@ public class CustomerService {
                 createdBy,
                 false
         );
+    }
+
+    @Transactional
+    public CustomerPaymentResponse createCustomerPayment(Long customerId, CustomerPaymentRequest request) {
+        if (request == null) {
+            throw new RuntimeException("Payment request is required");
+        }
+        if (request.getBranchId() == null) {
+            throw new RuntimeException("Branch is required");
+        }
+
+        Customer customer = getById(customerId);
+        if (!request.getBranchId().equals(customer.getBranchId())) {
+            throw new RuntimeException("Customer does not belong to this branch");
+        }
+
+        BigDecimal paymentAmount = positiveMoney(request.getAmount());
+        BigDecimal previousShopBalance = moneyOrZero(customer.getShopBalance());
+        BigDecimal previousOutstanding = outstandingDebt(previousShopBalance);
+        if (previousOutstanding.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Customer has no outstanding credit balance");
+        }
+        if (paymentAmount.compareTo(previousOutstanding) > 0) {
+            throw new RuntimeException("Payment amount exceeds outstanding balance");
+        }
+
+        String paymentMethod = normalizePaymentMethod(request.getPaymentMethod());
+        Long receivedBy = request.getReceivedBy() != null ? request.getReceivedBy() : getCurrentUserId();
+        CashSession cashSession = null;
+        Counter counter = null;
+
+        if (isCashPayment(paymentMethod)) {
+            if (request.getCashSessionId() == null) {
+                throw new RuntimeException("Cash session is required for CASH payment");
+            }
+            if (request.getCounterId() == null) {
+                throw new RuntimeException("Counter is required for CASH payment");
+            }
+
+            cashSession = cashSessionRepository.findById(request.getCashSessionId())
+                    .orElseThrow(() -> new RuntimeException("Cash session not found"));
+
+            if (!"OPEN".equalsIgnoreCase(cashSession.getStatus())) {
+                throw new RuntimeException("Cash session is not OPEN");
+            }
+            if (!request.getCounterId().equals(cashSession.getCounterId())) {
+                throw new RuntimeException("Cash session does not belong to this counter");
+            }
+
+            counter = counterRepository.findById(request.getCounterId())
+                    .orElseThrow(() -> new RuntimeException("Counter not found"));
+            if (!request.getBranchId().equals(counter.getBranchId())) {
+                throw new RuntimeException("Counter does not belong to this branch");
+            }
+        }
+
+        BigDecimal newShopBalance = previousShopBalance.add(paymentAmount);
+        customer.setShopBalance(newShopBalance);
+        customer.setUpdatedAt(LocalDateTime.now());
+        customerRepository.save(customer);
+
+        CustomerBalanceTransaction paymentTransaction = new CustomerBalanceTransaction();
+        paymentTransaction.setBranchId(customer.getBranchId());
+        paymentTransaction.setCustomerId(customerId);
+        paymentTransaction.setType("CUSTOMER_PAYMENT");
+        paymentTransaction.setAmount(paymentAmount);
+        paymentTransaction.setPreviousBalance(previousOutstanding);
+        paymentTransaction.setNewBalance(outstandingDebt(newShopBalance));
+        paymentTransaction.setRefTable("customer_payments");
+        paymentTransaction.setNote(resolvePaymentNote(request.getNote(), paymentMethod));
+        paymentTransaction.setCreatedBy(receivedBy);
+        paymentTransaction.setCreatedAt(LocalDateTime.now());
+        CustomerBalanceTransaction savedPaymentTransaction = balanceTransactionRepository.save(paymentTransaction);
+
+        savedPaymentTransaction.setRefId(savedPaymentTransaction.getTxnId());
+        savedPaymentTransaction = balanceTransactionRepository.save(savedPaymentTransaction);
+
+        CashSessionTransaction savedCashTransaction = null;
+        if (isCashPayment(paymentMethod)) {
+            CashSessionTransaction cashTransaction = new CashSessionTransaction();
+            cashTransaction.setSessionId(cashSession.getSessionId());
+            cashTransaction.setType("CUSTOMER_PAYMENT_IN");
+            cashTransaction.setAmount(paymentAmount);
+            cashTransaction.setPaymentMethod(paymentMethod);
+            cashTransaction.setCounterId(counter.getCounterId());
+            cashTransaction.setReferenceNo(StringUtils.hasText(request.getReferenceNo())
+                    ? request.getReferenceNo().trim()
+                    : "CUSTOMER_PAYMENT-" + savedPaymentTransaction.getTxnId());
+            cashTransaction.setNote(resolvePaymentNote(request.getNote(), paymentMethod));
+            cashTransaction.setCreatedBy(receivedBy);
+            cashTransaction.setCreatedAt(LocalDateTime.now());
+            savedCashTransaction = cashSessionTransactionRepository.save(cashTransaction);
+        }
+
+        return CustomerPaymentResponse.builder()
+                .paymentTransaction(toBalanceTransactionResponse(savedPaymentTransaction))
+                .updatedOutstandingBalance(outstandingDebt(newShopBalance))
+                .cashSessionTransaction(savedCashTransaction != null ? toCashSessionTransactionResponse(savedCashTransaction) : null)
+                .build();
     }
 
     private void applyBalanceChange(
@@ -348,6 +460,64 @@ public class CustomerService {
     private BigDecimal outstandingDebt(BigDecimal shopBalanceValue) {
         BigDecimal shopBalance = moneyOrZero(shopBalanceValue);
         return shopBalance.compareTo(BigDecimal.ZERO) < 0 ? shopBalance.abs() : BigDecimal.ZERO;
+    }
+
+    private String normalizePaymentMethod(String paymentMethod) {
+        if (!StringUtils.hasText(paymentMethod)) {
+            throw new RuntimeException("Payment method is required");
+        }
+        return paymentMethod.trim().toUpperCase();
+    }
+
+    private boolean isCashPayment(String paymentMethod) {
+        return "CASH".equalsIgnoreCase(paymentMethod);
+    }
+
+    private String resolvePaymentNote(String note, String paymentMethod) {
+        return StringUtils.hasText(note) ? note.trim() : "Customer credit repayment by " + paymentMethod;
+    }
+
+    private CustomerBalanceTransactionResponse toBalanceTransactionResponse(CustomerBalanceTransaction transaction) {
+        CustomerBalanceTransactionResponse response = new CustomerBalanceTransactionResponse();
+        response.setTxnId(transaction.getTxnId());
+        response.setBranchId(transaction.getBranchId());
+        response.setCustomerId(transaction.getCustomerId());
+        response.setType(transaction.getType());
+        response.setAmount(transaction.getAmount());
+        response.setPreviousBalance(transaction.getPreviousBalance());
+        response.setNewBalance(transaction.getNewBalance());
+        response.setRefTable(transaction.getRefTable());
+        response.setRefId(transaction.getRefId());
+        response.setNote(transaction.getNote());
+        response.setCreatedBy(transaction.getCreatedBy());
+        response.setCreatedByName(findCreatedByName(transaction.getCreatedBy()));
+        response.setCreatedAt(transaction.getCreatedAt());
+        return response;
+    }
+
+    private CashSessionTransactionResponse toCashSessionTransactionResponse(CashSessionTransaction transaction) {
+        return CashSessionTransactionResponse.builder()
+                .id(transaction.getId())
+                .sessionId(transaction.getSessionId())
+                .type(transaction.getType())
+                .amount(transaction.getAmount())
+                .paymentMethod(transaction.getPaymentMethod())
+                .paymentId(transaction.getPaymentId())
+                .supplierPaymentId(transaction.getSupplierPaymentId())
+                .purchaseReturnId(transaction.getPurchaseReturnId())
+                .supplierId(transaction.getSupplierId())
+                .supplyId(transaction.getSupplyId())
+                .counterId(transaction.getCounterId())
+                .referenceNo(transaction.getReferenceNo())
+                .expenseId(transaction.getExpenseId())
+                .withdrawalId(transaction.getWithdrawalId())
+                .orderId(transaction.getOrderId())
+                .invoiceNo(transaction.getInvoiceNo())
+                .salesReturnId(transaction.getSalesReturnId())
+                .note(transaction.getNote())
+                .createdBy(transaction.getCreatedBy())
+                .createdAt(transaction.getCreatedAt())
+                .build();
     }
 
 }

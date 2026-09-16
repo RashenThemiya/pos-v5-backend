@@ -15,8 +15,13 @@ public class PurchaseOrderResponseDto {
     private Long branchId;
     private Long supplierId;
     private String supplierName;
+    private String supplierContactPerson;
+    private String supplierPhone;
+    private String supplierEmail;
+    private String supplierAddress;
     private String poNo;
     private String status;
+    private LocalDate orderDate;
     private LocalDate expectedDate;
     private Long createdBy;
     private String createdByName;
@@ -27,5 +32,13 @@ public class PurchaseOrderResponseDto {
     private BigDecimal balanceAmount;
     private String receivingStatus;
     private String paymentStatus;
+    private Integer itemCount;
+    private BigDecimal orderedQuantity;
+    private BigDecimal receivedQuantity;
+    private BigDecimal remainingQuantity;
+    private Boolean overdue;
     private List<PurchaseOrderItemResponseDto> items;
+    private List<SupplyResponseDto> receipts;
+    private List<SupplierPaymentResponseDto> payments;
+    private List<PurchaseReturnResponseDto> purchaseReturns;
 }

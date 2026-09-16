@@ -133,6 +133,15 @@ public class CustomerController {
         return ResponseEntity.ok(ApiResponse.success("Balance deducted successfully", toResponse(customerService.getById(customerId))));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_UPDATE')")
+    @PostMapping("/{customerId}/payments")
+    public ResponseEntity<ApiResponse<CustomerPaymentResponse>> createCustomerPayment(
+            @PathVariable Long customerId,
+            @RequestBody CustomerPaymentRequest request) {
+        CustomerPaymentResponse response = customerService.createCustomerPayment(customerId, request);
+        return ResponseEntity.ok(ApiResponse.success("Customer payment recorded successfully", response));
+    }
+
     // ==================== LOYALTY TRANSACTION ENDPOINTS ====================
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CUSTOMER_VIEW')")

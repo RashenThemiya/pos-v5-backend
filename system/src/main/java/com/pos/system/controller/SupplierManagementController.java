@@ -3,6 +3,9 @@ package com.pos.system.controller;
 import com.pos.system.dto.supplier.*;
 import com.pos.system.service.SupplierManagementService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -69,11 +72,27 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.getPurchaseOrdersByItem(branchId, itemId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW')")
+    @GetMapping("/purchase-orders/branch/{branchId}/paged")
+    public ResponseEntity<PurchaseOrderPageResponseDto> searchPurchaseOrdersByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute PurchaseOrderSearchRequestDto request,
+            @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(supplierManagementService.searchPurchaseOrdersByBranch(branchId, request, pageable));
+    }
+
     // SUPPLY / GRN
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_CREATE')")
     @PostMapping("/supplies")
     public ResponseEntity<SupplyResponseDto> createSupply(@RequestBody SupplyRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.createSupply(dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_CREATE')")
+    @PostMapping("/manual-grns")
+    public ResponseEntity<SupplyResponseDto> createManualGrn(@RequestBody SupplyRequestDto dto) {
+        dto.setPoId(null);
         return ResponseEntity.ok(supplierManagementService.createSupply(dto));
     }
 

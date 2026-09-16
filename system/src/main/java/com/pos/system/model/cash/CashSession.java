@@ -31,5 +31,7 @@ public class CashSession {
     private BigDecimal closingCash;
     private BigDecimal expectedCash;
     private BigDecimal cashDifference;
+    private String sessionType;
+    private String purpose;
     private String status = "OPEN";
 }

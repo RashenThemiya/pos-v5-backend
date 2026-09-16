@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -15,6 +16,8 @@ public interface SupplyRepository extends JpaRepository<Supply, Long> {
     List<Supply> findByBranchId(Long branchId);
 
     List<Supply> findByPoId(Long poId);
+    @Query("select supply from Supply supply where supply.poId in :poIds")
+    List<Supply> findByPoIdIn(@Param("poIds") Collection<Long> poIds);
 
     @Query("SELECT DISTINCT s FROM Supply s JOIN SupplyProduct sp ON sp.supplyId = s.supplyId " +
             "WHERE s.branchId = :branchId AND sp.itemId = :itemId ORDER BY s.supplyDate DESC")

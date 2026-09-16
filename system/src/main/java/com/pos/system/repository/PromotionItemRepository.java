@@ -11,4 +11,5 @@ public interface PromotionItemRepository extends JpaRepository<PromotionItem, Lo
     List<PromotionItem> findByPromotionIdAndIsActiveTrue(Long promotionId);
     Optional<PromotionItem> findByPromotionIdAndItemId(Long promotionId, Long itemId);
     List<PromotionItem> findByBranchIdAndItemIdAndIsActiveTrue(Long branchId, Long itemId);
+    List<PromotionItem> findByBranchIdAndItemIdAndVariantIdAndIsActiveTrue(Long branchId, Long itemId, Long variantId);
 }

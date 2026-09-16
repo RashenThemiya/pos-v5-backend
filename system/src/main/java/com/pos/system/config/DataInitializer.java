@@ -38,6 +38,7 @@ public class DataInitializer implements CommandLineRunner {
         removeOldStockQuantityColumns();
         repairRolePermissionUniqueIndex();
         repairPurchaseOrderItemUniqueIndex();
+        repairPromotionVariantColumns();
         migrateRolePermissionAuthorityCodes();
         migrateItemUnitsToMasterUnits();
 
@@ -154,6 +155,12 @@ public class DataInitializer implements CommandLineRunner {
         }
     }
 
+    private void repairPromotionVariantColumns() {
+        addColumnIfMissing("promotion_items", "variant_id", "BIGINT NULL");
+        addColumnIfMissing("promotion_buyx_gety_rules", "buy_variant_id", "BIGINT NULL");
+        addColumnIfMissing("promotion_buyx_gety_rules", "get_variant_id", "BIGINT NULL");
+    }
+
     private void migrateRolePermissionAuthorityCodes() {
         if (!columnExists("role_permissions", "permission_id")
                 || !columnExists("role_permissions", "authority_code")
@@ -177,6 +184,13 @@ public class DataInitializer implements CommandLineRunner {
         if (columnExists(tableName, columnName)) {
             jdbcTemplate.execute("ALTER TABLE " + tableName + " DROP COLUMN " + columnName);
             System.out.println("Removed old column: " + tableName + "." + columnName);
+        }
+    }
+
+    private void addColumnIfMissing(String tableName, String columnName, String definition) {
+        if (tableExists(tableName) && !columnExists(tableName, columnName)) {
+            jdbcTemplate.execute("ALTER TABLE " + quoteIdentifier(tableName) + " ADD COLUMN " + quoteIdentifier(columnName) + " " + definition);
+            System.out.println("Added missing column: " + tableName + "." + columnName);
         }
     }
 
