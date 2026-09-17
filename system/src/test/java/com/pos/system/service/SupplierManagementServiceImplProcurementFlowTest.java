@@ -21,6 +21,7 @@ import com.pos.system.model.supplier.Supplier;
 import com.pos.system.model.supplier.SupplierBalanceTransaction;
 import com.pos.system.model.supplier.SupplierItem;
 import com.pos.system.model.supplier.SupplierPayment;
+import com.pos.system.model.supplier.SupplierPaymentAllocation;
 import com.pos.system.model.supplier.Supply;
 import com.pos.system.model.supplier.SupplyProduct;
 import com.pos.system.repository.CashSessionRepository;
@@ -36,12 +37,14 @@ import com.pos.system.repository.PurchaseOrderItemRepository;
 import com.pos.system.repository.PurchaseOrderRepository;
 import com.pos.system.repository.PurchaseReturnItemRepository;
 import com.pos.system.repository.PurchaseReturnRepository;
+import com.pos.system.repository.PurchaseReturnRefundRepository;
 import com.pos.system.repository.StockBatchRepository;
 import com.pos.system.repository.StockMovementRepository;
 import com.pos.system.repository.StockRepository;
 import com.pos.system.repository.SupplierBalanceTransactionRepository;
 import com.pos.system.repository.SupplierItemRepository;
 import com.pos.system.repository.SupplierPaymentRepository;
+import com.pos.system.repository.SupplierPaymentAllocationRepository;
 import com.pos.system.repository.SupplierRepository;
 import com.pos.system.repository.SupplyProductRepository;
 import com.pos.system.repository.SupplyRepository;
@@ -90,6 +93,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private SupplyRepository supplyRepository;
     @Mock private SupplyProductRepository supplyProductRepository;
     @Mock private SupplierPaymentRepository supplierPaymentRepository;
+    @Mock private SupplierPaymentAllocationRepository supplierPaymentAllocationRepository;
     @Mock private SupplierBalanceTransactionRepository supplierBalanceTransactionRepository;
     @Mock private StockRepository stockRepository;
     @Mock private StockBatchRepository stockBatchRepository;
@@ -108,6 +112,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
     @Mock private PaymentRepository paymentRepository;
     @Mock private PurchaseReturnRepository purchaseReturnRepository;
     @Mock private PurchaseReturnItemRepository purchaseReturnItemRepository;
+    @Mock private PurchaseReturnRefundRepository purchaseReturnRefundRepository;
 
     private SupplierManagementServiceImpl service;
     private Supplier supplier;
@@ -116,6 +121,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
     private final List<Supply> supplies = new ArrayList<>();
     private final List<SupplyProduct> supplyProducts = new ArrayList<>();
     private final List<SupplierPayment> supplierPayments = new ArrayList<>();
+    private final List<SupplierPaymentAllocation> supplierPaymentAllocations = new ArrayList<>();
     private final List<SupplierBalanceTransaction> supplierLedger = new ArrayList<>();
     private long poSequence;
     private long supplySequence;
@@ -130,6 +136,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 supplyRepository,
                 supplyProductRepository,
                 supplierPaymentRepository,
+                supplierPaymentAllocationRepository,
                 supplierBalanceTransactionRepository,
                 stockRepository,
                 stockBatchRepository,
@@ -147,7 +154,8 @@ class SupplierManagementServiceImplProcurementFlowTest {
                 orderRepository,
                 paymentRepository,
                 purchaseReturnRepository,
-                purchaseReturnItemRepository
+                purchaseReturnItemRepository,
+                purchaseReturnRefundRepository
         );
 
         poSequence = 90L;
@@ -157,6 +165,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
         supplier.setBranchId(BRANCH_ID);
         supplier.setName("ABC Suppliers");
         supplier.setBalance(BigDecimal.ZERO);
+        supplier.setAdvanceCredit(BigDecimal.ZERO);
 
         stubCatalogItem(ITEM_A_ID, UNIT_A_ID, "Coca-Cola");
         stubCatalogVariant(ITEM_A_ID, VARIANT_A_ID, "SKU-10-RED");
@@ -256,6 +265,13 @@ class SupplierManagementServiceImplProcurementFlowTest {
             Long poId = invocation.getArgument(0);
             return supplies.stream().filter(supply -> poId.equals(supply.getPoId())).toList();
         });
+        when(supplyRepository.findByBranchIdAndSupplierIdAndPaymentStatusNotOrderBySupplyDateAsc(
+                anyLong(), anyLong(), anyString())).thenAnswer(invocation -> supplies.stream()
+                .filter(supply -> supply.getBranchId().equals(invocation.getArgument(0)))
+                .filter(supply -> supply.getSupplierId().equals(invocation.getArgument(1)))
+                .filter(supply -> !"PAID".equals(supply.getPaymentStatus()))
+                .sorted(Comparator.comparing(Supply::getSupplyDate))
+                .toList());
         when(supplyProductRepository.findByInternalBatchBarcode(anyString())).thenReturn(Optional.empty());
         when(supplyProductRepository.save(any(SupplyProduct.class))).thenAnswer(invocation -> {
             SupplyProduct product = invocation.getArgument(0);
@@ -289,6 +305,16 @@ class SupplierManagementServiceImplProcurementFlowTest {
                     .sorted(Comparator.comparing(SupplierPayment::getPaymentDate).reversed())
                     .toList();
         });
+        when(supplierPaymentAllocationRepository.save(any(SupplierPaymentAllocation.class))).thenAnswer(invocation -> {
+            SupplierPaymentAllocation allocation = invocation.getArgument(0);
+            allocation.setAllocationId((long) supplierPaymentAllocations.size() + 1);
+            supplierPaymentAllocations.add(allocation);
+            return allocation;
+        });
+        when(supplierPaymentAllocationRepository.findBySupplierPaymentIdOrderByAllocationIdAsc(anyLong()))
+                .thenAnswer(invocation -> supplierPaymentAllocations.stream()
+                        .filter(allocation -> allocation.getSupplierPaymentId().equals(invocation.getArgument(0)))
+                        .toList());
         when(supplierBalanceTransactionRepository.save(any(SupplierBalanceTransaction.class))).thenAnswer(invocation -> {
             SupplierBalanceTransaction transaction = invocation.getArgument(0);
             if (transaction.getTxnId() == null) {
@@ -576,13 +602,56 @@ class SupplierManagementServiceImplProcurementFlowTest {
     }
 
     @Test
-    void preventsOverpaymentAgainstPurchaseOrderBalance() {
+    void storesPurchaseOrderOverpaymentAsSupplierAdvanceCredit() {
         PurchaseOrderResponseDto po = service.createPurchaseOrder(singleItemPo("PO-OVER-PAY", "100", "1000"));
         payPo(po.getPoId(), "80000");
+        payPo(po.getPoId(), "30000");
 
-        assertThatThrownBy(() -> payPo(po.getPoId(), "30000"))
-                .isInstanceOf(RuntimeException.class)
-                .hasMessageContaining("Payment amount exceeds purchase order balance");
+        assertThat(supplier.getAdvanceCredit()).isEqualByComparingTo("110000");
+    }
+
+    @Test
+    void directGrnOverpaymentCreatesAdvanceCreditThatCanPayAnotherGrn() {
+        PurchaseOrderResponseDto firstPo = service.createPurchaseOrder(singleItemPo("PO-CREDIT-1", "1", "1000"));
+        receivePo(firstPo.getPoId(), "1", "0");
+        Supply firstGrn = supplies.get(0);
+
+        paySupply(firstGrn.getSupplyId(), "1400");
+
+        assertThat(firstGrn.getPaymentStatus()).isEqualTo("PAID");
+        assertThat(firstGrn.getBalanceAmount()).isEqualByComparingTo("0");
+        assertThat(supplier.getAdvanceCredit()).isEqualByComparingTo("400");
+
+        PurchaseOrderResponseDto secondPo = service.createPurchaseOrder(singleItemPo("PO-CREDIT-2", "1", "600"));
+        receivePo(secondPo.getPoId(), "1", "0");
+        Supply secondGrn = supplies.get(1);
+
+        SupplierPaymentRequestDto creditPayment = paymentRequest("400");
+        creditPayment.setSupplyId(secondGrn.getSupplyId());
+        creditPayment.setPaymentMethod("ADVANCE_CREDIT");
+        service.createSupplierPayment(creditPayment);
+
+        assertThat(secondGrn.getPaidAmount()).isEqualByComparingTo("400");
+        assertThat(secondGrn.getBalanceAmount()).isEqualByComparingTo("600");
+        assertThat(secondGrn.getPaymentStatus()).isEqualTo("PARTIAL");
+        assertThat(supplier.getAdvanceCredit()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void supplierLevelPaymentAllocatesOldestGrnsFirst() {
+        PurchaseOrderResponseDto firstPo = service.createPurchaseOrder(singleItemPo("PO-FIFO-1", "1", "1000"));
+        receivePo(firstPo.getPoId(), "1", "0");
+        PurchaseOrderResponseDto secondPo = service.createPurchaseOrder(singleItemPo("PO-FIFO-2", "1", "1000"));
+        receivePo(secondPo.getPoId(), "1", "0");
+
+        service.createSupplierPayment(paymentRequest("1500"));
+
+        assertThat(supplies.get(0).getPaymentStatus()).isEqualTo("PAID");
+        assertThat(supplies.get(0).getBalanceAmount()).isEqualByComparingTo("0");
+        assertThat(supplies.get(1).getPaymentStatus()).isEqualTo("PARTIAL");
+        assertThat(supplies.get(1).getBalanceAmount()).isEqualByComparingTo("500");
+        assertThat(supplier.getAdvanceCredit()).isEqualByComparingTo("0");
+        assertThat(supplierPaymentAllocations).hasSize(2);
     }
 
     @Test

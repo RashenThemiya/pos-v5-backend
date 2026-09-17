@@ -34,4 +34,10 @@ public interface SupplyRepository extends JpaRepository<Supply, Long> {
             Long supplierId,
             String paymentStatus
     );
+
+    List<Supply> findByBranchIdAndSupplierIdAndPaymentStatusNotOrderBySupplyDateAsc(
+            Long branchId,
+            Long supplierId,
+            String paymentStatus
+    );
 }

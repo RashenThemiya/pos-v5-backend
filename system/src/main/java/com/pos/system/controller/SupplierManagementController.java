@@ -175,6 +175,21 @@ public class SupplierManagementController {
         return ResponseEntity.ok(supplierManagementService.createPurchaseReturn(dto));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_CREATE')")
+    @PostMapping("/purchase-returns/{purchaseReturnId}/refunds")
+    public ResponseEntity<PurchaseReturnRefundResponseDto> recordPurchaseReturnRefund(
+            @PathVariable Long purchaseReturnId,
+            @RequestBody PurchaseReturnRefundRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.recordPurchaseReturnRefund(purchaseReturnId, dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/{purchaseReturnId}/refunds")
+    public ResponseEntity<List<PurchaseReturnRefundResponseDto>> getPurchaseReturnRefunds(
+            @PathVariable Long purchaseReturnId) {
+        return ResponseEntity.ok(supplierManagementService.getPurchaseReturnRefunds(purchaseReturnId));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
     @GetMapping("/purchase-returns/{purchaseReturnId}")
     public ResponseEntity<PurchaseReturnResponseDto> getPurchaseReturnById(@PathVariable Long purchaseReturnId) {

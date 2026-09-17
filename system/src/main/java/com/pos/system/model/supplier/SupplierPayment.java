@@ -39,4 +39,10 @@ public class SupplierPayment {
     private Long cashSessionId;
     private String referenceNo;
     private String note;
+    @Column(precision = 14, scale = 2)
+    private BigDecimal allocatedAmount = BigDecimal.ZERO;
+    @Column(precision = 14, scale = 2)
+    private BigDecimal advanceCreditAdded = BigDecimal.ZERO;
+    @Column(precision = 14, scale = 2)
+    private BigDecimal advanceCreditUsed = BigDecimal.ZERO;
 }

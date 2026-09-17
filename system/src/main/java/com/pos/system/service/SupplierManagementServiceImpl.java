@@ -56,6 +56,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private final SupplyProductRepository supplyProductRepository;
 
     private final SupplierPaymentRepository supplierPaymentRepository;
+    private final SupplierPaymentAllocationRepository supplierPaymentAllocationRepository;
     private final SupplierBalanceTransactionRepository supplierBalanceTransactionRepository;
 
     private final StockRepository stockRepository;
@@ -77,7 +78,8 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     private final PaymentRepository paymentRepository;
 
     private final PurchaseReturnRepository purchaseReturnRepository;
-private final PurchaseReturnItemRepository purchaseReturnItemRepository;
+    private final PurchaseReturnItemRepository purchaseReturnItemRepository;
+    private final PurchaseReturnRefundRepository purchaseReturnRefundRepository;
 
     // =========================
     // SUPPLIER
@@ -99,6 +101,7 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         supplier.setEmail(dto.getEmail());
         supplier.setAddress(dto.getAddress());
         supplier.setBalance(BigDecimal.ZERO);
+        supplier.setAdvanceCredit(BigDecimal.ZERO);
         supplier.setIsActive(dto.getIsActive() != null ? dto.getIsActive() : true);
         supplier.setCreatedAt(LocalDateTime.now());
         supplier.setUpdatedAt(LocalDateTime.now());
@@ -1164,6 +1167,18 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 ? dto.getPaymentMethod().trim().toUpperCase()
                 : "CASH";
 
+        Set<String> supportedMethods = Set.of(
+                "CASH", "COUNTER_CASH", "BANK_TRANSFER", "CHEQUE", "CARD", "ADVANCE_CREDIT");
+        if (!supportedMethods.contains(paymentMethod)) {
+            throw new RuntimeException("Unsupported supplier payment method: " + paymentMethod);
+        }
+
+        boolean usingAdvanceCredit = "ADVANCE_CREDIT".equals(paymentMethod);
+        BigDecimal availableAdvanceCredit = nvlMoney(supplier.getAdvanceCredit());
+        if (usingAdvanceCredit && dto.getAmount().compareTo(availableAdvanceCredit) > 0) {
+            throw new RuntimeException("Payment amount exceeds supplier advance credit");
+        }
+
         Long paidBy = resolveUserId(dto.getPaidBy());
         Long cashSessionId = null;
 
@@ -1187,53 +1202,37 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             cashSessionId = cashSession.getSessionId();
         }
 
-        Long paymentPoId = dto.getPoId();
-
-        if (dto.getSupplyId() != null) {
-            Supply supply = supplyRepository.findById(dto.getSupplyId())
-                    .orElseThrow(() -> new RuntimeException("Supply not found"));
-
-            if (!supply.getBranchId().equals(dto.getBranchId())) {
-                throw new RuntimeException("Supply does not belong to this branch");
-            }
-
-            if (!supply.getSupplierId().equals(dto.getSupplierId())) {
-                throw new RuntimeException("Supply does not belong to this supplier");
-            }
-
-            BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(dto.getAmount());
-            BigDecimal total = calculateSupplyTotal(supply);
-
-            if (newPaid.compareTo(total) > 0) {
-                throw new RuntimeException("Payment amount exceeds supply balance");
-            }
-
-            paymentPoId = supply.getPoId() != null ? supply.getPoId() : paymentPoId;
+        Supply selectedSupply = resolvePaymentSupply(dto);
+        List<Supply> targetSupplies;
+        if (selectedSupply != null) {
+            validatePaymentSupply(selectedSupply, dto.getBranchId(), dto.getSupplierId());
+            targetSupplies = List.of(selectedSupply);
+        } else {
+            targetSupplies = supplyRepository
+                    .findByBranchIdAndSupplierIdAndPaymentStatusNotOrderBySupplyDateAsc(
+                            dto.getBranchId(), dto.getSupplierId(), "PAID")
+                    .stream()
+                    .filter(supply -> nvlMoney(supply.getBalanceAmount()).compareTo(BigDecimal.ZERO) > 0)
+                    .toList();
         }
 
-        if (paymentPoId != null) {
-            PurchaseOrder purchaseOrder = purchaseOrderRepository.findById(paymentPoId)
-                    .orElseThrow(() -> new RuntimeException("Purchase order not found"));
-
-            if (!purchaseOrder.getBranchId().equals(dto.getBranchId())) {
-                throw new RuntimeException("Purchase order does not belong to this branch");
-            }
-
-            if (!purchaseOrder.getSupplierId().equals(dto.getSupplierId())) {
-                throw new RuntimeException("Purchase order does not belong to this supplier");
-            }
-
-            if ("CANCELLED".equalsIgnoreCase(purchaseOrder.getStatus())) {
-                throw new RuntimeException("Cannot record payment against a cancelled purchase order");
-            }
-
-            validatePurchaseOrderPaymentLimit(paymentPoId, dto.getAmount());
+        BigDecimal totalOutstanding = targetSupplies.stream()
+                .map(supply -> nvlMoney(supply.getBalanceAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (usingAdvanceCredit && dto.getAmount().compareTo(totalOutstanding) > 0) {
+            throw new RuntimeException("Advance credit payment exceeds the selected outstanding GRN balance");
         }
+
+        BigDecimal allocatedAmount = dto.getAmount().min(totalOutstanding);
+        BigDecimal advanceCreditAdded = usingAdvanceCredit
+                ? BigDecimal.ZERO : dto.getAmount().subtract(allocatedAmount);
+        Long paymentPoId = selectedSupply != null && selectedSupply.getPoId() != null
+                ? selectedSupply.getPoId() : dto.getPoId();
 
         SupplierPayment payment = new SupplierPayment();
         payment.setBranchId(dto.getBranchId());
         payment.setSupplierId(dto.getSupplierId());
-        payment.setSupplyId(dto.getSupplyId());
+        payment.setSupplyId(selectedSupply != null ? selectedSupply.getSupplyId() : null);
         payment.setPoId(paymentPoId);
         payment.setAmount(nvlMoney(dto.getAmount()));
         payment.setPaymentMethod(paymentMethod);
@@ -1242,39 +1241,51 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
         payment.setCashSessionId(cashSessionId);
         payment.setReferenceNo(dto.getReferenceNo());
         payment.setNote(dto.getNote());
+        payment.setAllocatedAmount(allocatedAmount);
+        payment.setAdvanceCreditAdded(advanceCreditAdded);
+        payment.setAdvanceCreditUsed(usingAdvanceCredit ? allocatedAmount : BigDecimal.ZERO);
 
         SupplierPayment savedPayment = supplierPaymentRepository.save(payment);
 
-        if (dto.getSupplyId() != null) {
-            Supply supply = supplyRepository.findById(dto.getSupplyId())
-                    .orElseThrow(() -> new RuntimeException("Supply not found"));
-
-            BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(payment.getAmount());
+        BigDecimal remainingToAllocate = allocatedAmount;
+        for (Supply supply : targetSupplies) {
+            if (remainingToAllocate.compareTo(BigDecimal.ZERO) <= 0) break;
+            BigDecimal allocationAmount = remainingToAllocate.min(nvlMoney(supply.getBalanceAmount()));
+            BigDecimal newPaid = nvlMoney(supply.getPaidAmount()).add(allocationAmount);
             BigDecimal total = calculateSupplyTotal(supply);
-            BigDecimal balance = total.subtract(newPaid);
-
             supply.setPaidAmount(newPaid);
-            supply.setBalanceAmount(balance);
+            supply.setBalanceAmount(total.subtract(newPaid));
             supply.setPaymentStatus(resolvePaymentStatus(total, newPaid));
-
             supplyRepository.save(supply);
+
+            SupplierPaymentAllocation allocation = new SupplierPaymentAllocation();
+            allocation.setSupplierPaymentId(savedPayment.getSupplierPaymentId());
+            allocation.setSupplyId(supply.getSupplyId());
+            allocation.setAmount(allocationAmount);
+            supplierPaymentAllocationRepository.save(allocation);
+            remainingToAllocate = remainingToAllocate.subtract(allocationAmount);
         }
 
-        supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(payment.getAmount()));
+        supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(allocatedAmount).max(BigDecimal.ZERO));
+        supplier.setAdvanceCredit(usingAdvanceCredit
+                ? availableAdvanceCredit.subtract(allocatedAmount)
+                : availableAdvanceCredit.add(advanceCreditAdded));
         supplier.setUpdatedAt(LocalDateTime.now());
         supplierRepository.save(supplier);
 
-        SupplierBalanceTransaction txn = new SupplierBalanceTransaction();
-        txn.setBranchId(dto.getBranchId());
-        txn.setSupplierId(dto.getSupplierId());
-        txn.setType("PAYMENT");
-        txn.setAmount(payment.getAmount());
-        txn.setRefTable("supplier_payments");
-        txn.setRefId(savedPayment.getSupplierPaymentId());
-        txn.setNote("Supplier payment recorded by " + paymentMethod);
-        txn.setCreatedBy(paidBy);
-        txn.setCreatedAt(LocalDateTime.now());
-        supplierBalanceTransactionRepository.save(txn);
+        if (allocatedAmount.compareTo(BigDecimal.ZERO) > 0) {
+            SupplierBalanceTransaction txn = new SupplierBalanceTransaction();
+            txn.setBranchId(dto.getBranchId());
+            txn.setSupplierId(dto.getSupplierId());
+            txn.setType("PAYMENT");
+            txn.setAmount(allocatedAmount);
+            txn.setRefTable("supplier_payments");
+            txn.setRefId(savedPayment.getSupplierPaymentId());
+            txn.setNote("Supplier payment allocated by " + paymentMethod);
+            txn.setCreatedBy(paidBy);
+            txn.setCreatedAt(LocalDateTime.now());
+            supplierBalanceTransactionRepository.save(txn);
+        }
 
         if (requiresCashSession(paymentMethod)) {
             CashSessionTransaction cashTxn = new CashSessionTransaction();
@@ -1288,6 +1299,32 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
             cashTxn.setCreatedAt(LocalDateTime.now());
 
             cashSessionTransactionRepository.save(cashTxn);
+        }
+
+        if (advanceCreditAdded.compareTo(BigDecimal.ZERO) > 0) {
+            SupplierBalanceTransaction creditTxn = new SupplierBalanceTransaction();
+            creditTxn.setBranchId(dto.getBranchId());
+            creditTxn.setSupplierId(dto.getSupplierId());
+            creditTxn.setType("ADVANCE_CREDIT_ADDED");
+            creditTxn.setAmount(advanceCreditAdded);
+            creditTxn.setRefTable("supplier_payments");
+            creditTxn.setRefId(savedPayment.getSupplierPaymentId());
+            creditTxn.setNote("Excess supplier payment stored as advance credit");
+            creditTxn.setCreatedBy(paidBy);
+            creditTxn.setCreatedAt(LocalDateTime.now());
+            supplierBalanceTransactionRepository.save(creditTxn);
+        } else if (usingAdvanceCredit) {
+            SupplierBalanceTransaction creditTxn = new SupplierBalanceTransaction();
+            creditTxn.setBranchId(dto.getBranchId());
+            creditTxn.setSupplierId(dto.getSupplierId());
+            creditTxn.setType("ADVANCE_CREDIT_USED");
+            creditTxn.setAmount(allocatedAmount);
+            creditTxn.setRefTable("supplier_payments");
+            creditTxn.setRefId(savedPayment.getSupplierPaymentId());
+            creditTxn.setNote("Supplier advance credit applied to GRN balance");
+            creditTxn.setCreatedBy(paidBy);
+            creditTxn.setCreatedAt(LocalDateTime.now());
+            supplierBalanceTransactionRepository.save(creditTxn);
         }
 
         return mapSupplierPayment(savedPayment);
@@ -2030,6 +2067,29 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
                 || paymentMethod.equalsIgnoreCase("COUNTER_PAYMENT");
     }
 
+    private Supply resolvePaymentSupply(SupplierPaymentRequestDto dto) {
+        Supply byId = dto.getSupplyId() == null ? null : supplyRepository.findById(dto.getSupplyId())
+                .orElseThrow(() -> new RuntimeException("Supply not found"));
+        Supply byGrn = isBlank(dto.getGrnNo()) ? null : supplyRepository.findByGrnNo(dto.getGrnNo().trim())
+                .orElseThrow(() -> new RuntimeException("GRN not found: " + dto.getGrnNo()));
+        if (byId != null && byGrn != null && !byId.getSupplyId().equals(byGrn.getSupplyId())) {
+            throw new RuntimeException("supplyId and grnNo refer to different GRNs");
+        }
+        return byId != null ? byId : byGrn;
+    }
+
+    private void validatePaymentSupply(Supply supply, Long branchId, Long supplierId) {
+        if (!supply.getBranchId().equals(branchId)) {
+            throw new RuntimeException("Supply does not belong to this branch");
+        }
+        if (!supply.getSupplierId().equals(supplierId)) {
+            throw new RuntimeException("Supply does not belong to this supplier");
+        }
+        if (nvlMoney(supply.getBalanceAmount()).compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("GRN is already fully paid");
+        }
+    }
+
     private String resolvePaymentStatus(BigDecimal total, BigDecimal paid) {
         total = nvlMoney(total);
         paid = nvlMoney(paid);
@@ -2111,52 +2171,21 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
     BigDecimal calculatedRefundAmount = BigDecimal.ZERO;
 
     PurchaseReturn purchaseReturn = new PurchaseReturn();
-    String refundMethod = dto.getRefundMethod() != null ? dto.getRefundMethod() : "BALANCE_ADJUSTMENT";
-    Long cashSessionId = null;
-    Long cashCounterId = null;
-
-    if (isBankRefundMethod(refundMethod) && isBlank(dto.getBankReference())) {
-        throw new RuntimeException("Bank reference is required for bank refund");
-    }
-
-    if (isCashRefundMethod(refundMethod)) {
-        if (dto.getCashSessionId() == null) {
-            throw new RuntimeException("Cash session is required for cash refund");
-        }
-
-        CashSession cashSession = cashSessionRepository.findById(dto.getCashSessionId())
-                .orElseThrow(() -> new RuntimeException("Cash session not found"));
-
-        if (!"OPEN".equalsIgnoreCase(cashSession.getStatus())) {
-            throw new RuntimeException("Cash session is not OPEN");
-        }
-
-        if (dto.getCounterId() != null && !cashSession.getCounterId().equals(dto.getCounterId())) {
-            throw new RuntimeException("Cash session does not belong to the selected counter");
-        }
-
-        Counter counter = counterRepository.findById(cashSession.getCounterId())
-                .orElseThrow(() -> new RuntimeException("Counter not found"));
-
-        if (!counter.getBranchId().equals(dto.getBranchId())) {
-            throw new RuntimeException("Cash session counter does not belong to this branch");
-        }
-
-        cashSessionId = cashSession.getSessionId();
-        cashCounterId = cashSession.getCounterId();
-    }
 
     purchaseReturn.setBranchId(dto.getBranchId());
     purchaseReturn.setSupplierId(dto.getSupplierId());
     purchaseReturn.setSupplyId(dto.getSupplyId());
     purchaseReturn.setReturnDate(dto.getReturnDate() != null ? dto.getReturnDate() : LocalDateTime.now());
-    purchaseReturn.setRefundMethod(refundMethod);
-    purchaseReturn.setCashSessionId(cashSessionId);
-    purchaseReturn.setBankReference(clean(dto.getBankReference()));
+    purchaseReturn.setRefundMethod(null);
+    purchaseReturn.setCashSessionId(null);
+    purchaseReturn.setBankReference(null);
     purchaseReturn.setRefundAmount(BigDecimal.ZERO);
+    purchaseReturn.setPaidAmount(BigDecimal.ZERO);
+    purchaseReturn.setBalanceDue(BigDecimal.ZERO);
+    purchaseReturn.setPaymentStatus("UNPAID");
     purchaseReturn.setReason(dto.getReason());
     purchaseReturn.setProcessedBy(processedBy);
-    purchaseReturn.setStatus(dto.getStatus() != null ? dto.getStatus() : "COMPLETED");
+    purchaseReturn.setStatus("COMPLETED");
 
     PurchaseReturn savedReturn = purchaseReturnRepository.save(purchaseReturn);
 
@@ -2199,63 +2228,135 @@ public PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto d
             : calculatedRefundAmount;
 
     savedReturn.setRefundAmount(refundAmount);
+    savedReturn.setPaidAmount(BigDecimal.ZERO);
+    savedReturn.setBalanceDue(refundAmount);
+    savedReturn.setPaymentStatus("UNPAID");
+    savedReturn.setReturnNo("PR-" + savedReturn.getPurchaseReturnId());
     purchaseReturnRepository.save(savedReturn);
 
-    if ("COMPLETED".equalsIgnoreCase(savedReturn.getStatus())) {
+    return getPurchaseReturnById(savedReturn.getPurchaseReturnId());
+}
 
-        supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(refundAmount));
-        supplier.setUpdatedAt(LocalDateTime.now());
-        supplierRepository.save(supplier);
+@Override
+public PurchaseReturnRefundResponseDto recordPurchaseReturnRefund(
+        Long purchaseReturnId, PurchaseReturnRefundRequestDto dto) {
+    PurchaseReturn purchaseReturn = purchaseReturnRepository.findById(purchaseReturnId)
+            .orElseThrow(() -> new RuntimeException("Purchase return not found"));
 
-        SupplierBalanceTransaction txn = new SupplierBalanceTransaction();
-        txn.setBranchId(dto.getBranchId());
-        txn.setSupplierId(dto.getSupplierId());
-        txn.setType("PURCHASE_RETURN");
-        txn.setAmount(refundAmount);
-        txn.setRefTable("purchase_returns");
-        txn.setRefId(savedReturn.getPurchaseReturnId());
-        txn.setNote(buildPurchaseReturnTxnNote(savedReturn));
-        txn.setCreatedBy(processedBy);
-        txn.setCreatedAt(LocalDateTime.now());
-        supplierBalanceTransactionRepository.save(txn);
-
-        if (isCashRefundMethod(savedReturn.getRefundMethod())) {
-            CashSessionTransaction cashTxn = new CashSessionTransaction();
-            cashTxn.setSessionId(savedReturn.getCashSessionId());
-            cashTxn.setType("PURCHASE_RETURN_CASH_REFUND");
-            cashTxn.setAmount(refundAmount);
-            cashTxn.setPaymentMethod("CASH");
-            cashTxn.setPurchaseReturnId(savedReturn.getPurchaseReturnId());
-            cashTxn.setSupplierId(savedReturn.getSupplierId());
-            cashTxn.setSupplyId(savedReturn.getSupplyId());
-            cashTxn.setCounterId(cashCounterId);
-            cashTxn.setReferenceNo(dto.getSupplyId() != null ? "Supply #" + dto.getSupplyId() : null);
-            cashTxn.setNote(buildPurchaseReturnCashRefundNote(savedReturn, supplier));
-            cashTxn.setCreatedBy(processedBy);
-            cashTxn.setCreatedAt(LocalDateTime.now());
-            cashSessionTransactionRepository.save(cashTxn);
-        }
-
-        if (dto.getSupplyId() != null) {
-            Supply supply = supplyRepository.findById(dto.getSupplyId())
-                    .orElseThrow(() -> new RuntimeException("Supply not found"));
-
-            BigDecimal newBalance = nvlMoney(supply.getBalanceAmount()).subtract(refundAmount);
-            if (newBalance.compareTo(BigDecimal.ZERO) < 0) {
-                newBalance = BigDecimal.ZERO;
-            }
-
-            BigDecimal newPaidLikeValue = nvlMoney(supply.getTotal()).subtract(newBalance);
-
-            supply.setBalanceAmount(newBalance);
-            supply.setPaidAmount(newPaidLikeValue);
-            supply.setPaymentStatus(resolvePaymentStatus(supply.getTotal(), newPaidLikeValue));
-
-            supplyRepository.save(supply);
-        }
+    if (dto == null || dto.getBranchId() == null || !dto.getBranchId().equals(purchaseReturn.getBranchId())) {
+        throw new RuntimeException("Purchase return does not belong to this branch");
     }
 
-    return getPurchaseReturnById(savedReturn.getPurchaseReturnId());
+    if (dto.getAmount() == null || dto.getAmount().compareTo(BigDecimal.ZERO) <= 0) {
+        throw new RuntimeException("Refund amount must be greater than 0");
+    }
+
+    String method = dto.getRefundMethod() == null ? "" : dto.getRefundMethod().trim().toUpperCase();
+    if (!Set.of("CASH_REFUND", "BANK_REFUND", "BALANCE_ADJUSTMENT").contains(method)) {
+        throw new RuntimeException("Refund method must be CASH_REFUND, BANK_REFUND, or BALANCE_ADJUSTMENT");
+    }
+    if ("BANK_REFUND".equals(method) && isBlank(dto.getBankReference())) {
+        throw new RuntimeException("Bank reference is required for bank refund");
+    }
+
+    BigDecimal refundTotal = nvlMoney(purchaseReturn.getRefundAmount());
+    BigDecimal paidAmount = nvlMoney(purchaseReturn.getPaidAmount());
+    BigDecimal balanceDue = refundTotal.subtract(paidAmount);
+    if (dto.getAmount().compareTo(balanceDue) > 0) {
+        throw new RuntimeException("Refund amount cannot exceed balance due: " + balanceDue);
+    }
+
+    Long counterId = null;
+    Long cashSessionId = null;
+    if ("CASH_REFUND".equals(method)) {
+        if (dto.getCashSessionId() == null) {
+            throw new RuntimeException("Cash session is required for cash refund");
+        }
+        CashSession session = cashSessionRepository.findById(dto.getCashSessionId())
+                .orElseThrow(() -> new RuntimeException("Cash session not found"));
+        if (!"OPEN".equalsIgnoreCase(session.getStatus())) {
+            throw new RuntimeException("Cash session is not OPEN");
+        }
+        if (dto.getCounterId() != null && !dto.getCounterId().equals(session.getCounterId())) {
+            throw new RuntimeException("Cash session does not belong to the selected counter");
+        }
+        Counter counter = counterRepository.findById(session.getCounterId())
+                .orElseThrow(() -> new RuntimeException("Counter not found"));
+        if (!purchaseReturn.getBranchId().equals(counter.getBranchId())) {
+            throw new RuntimeException("Cash session counter does not belong to this branch");
+        }
+        counterId = counter.getCounterId();
+        cashSessionId = session.getSessionId();
+    }
+
+    Long processedBy = resolveUserId(dto.getProcessedBy());
+    LocalDateTime now = LocalDateTime.now();
+    PurchaseReturnRefund refund = new PurchaseReturnRefund();
+    refund.setPurchaseReturnId(purchaseReturnId);
+    refund.setBranchId(purchaseReturn.getBranchId());
+    refund.setAmount(dto.getAmount());
+    refund.setRefundMethod(method);
+    refund.setReferenceNo(clean(dto.getReferenceNo()));
+    refund.setBankReference(clean(dto.getBankReference()));
+    refund.setCounterId(counterId);
+    refund.setCashSessionId(cashSessionId);
+    refund.setProcessedBy(processedBy);
+    refund.setRefundedAt(now);
+    PurchaseReturnRefund saved = purchaseReturnRefundRepository.save(refund);
+
+    BigDecimal newPaidAmount = paidAmount.add(dto.getAmount());
+    BigDecimal newBalanceDue = refundTotal.subtract(newPaidAmount);
+    purchaseReturn.setPaidAmount(newPaidAmount);
+    purchaseReturn.setBalanceDue(newBalanceDue);
+    purchaseReturn.setPaymentStatus(newBalanceDue.compareTo(BigDecimal.ZERO) == 0
+            ? "REFUNDED" : "PARTIALLY_REFUNDED");
+    purchaseReturnRepository.save(purchaseReturn);
+
+    Supplier supplier = supplierRepository.findById(purchaseReturn.getSupplierId())
+            .orElseThrow(() -> new RuntimeException("Supplier not found"));
+    supplier.setBalance(nvlMoney(supplier.getBalance()).subtract(dto.getAmount()));
+    supplier.setUpdatedAt(now);
+    supplierRepository.save(supplier);
+
+    SupplierBalanceTransaction ledgerTxn = new SupplierBalanceTransaction();
+    ledgerTxn.setBranchId(purchaseReturn.getBranchId());
+    ledgerTxn.setSupplierId(purchaseReturn.getSupplierId());
+    ledgerTxn.setType("PURCHASE_RETURN_REFUND");
+    ledgerTxn.setAmount(dto.getAmount());
+    ledgerTxn.setRefTable("purchase_return_refunds");
+    ledgerTxn.setRefId(saved.getRefundId());
+    ledgerTxn.setNote("Supplier refund for " + purchaseReturn.getReturnNo() + " via " + method);
+    ledgerTxn.setCreatedBy(processedBy);
+    ledgerTxn.setCreatedAt(now);
+    supplierBalanceTransactionRepository.save(ledgerTxn);
+
+    if ("CASH_REFUND".equals(method)) {
+        CashSessionTransaction cashTxn = new CashSessionTransaction();
+        cashTxn.setSessionId(cashSessionId);
+        cashTxn.setType("PURCHASE_RETURN_CASH_REFUND");
+        cashTxn.setAmount(dto.getAmount());
+        cashTxn.setPaymentMethod("CASH");
+        cashTxn.setPurchaseReturnId(purchaseReturnId);
+        cashTxn.setSupplierId(purchaseReturn.getSupplierId());
+        cashTxn.setSupplyId(purchaseReturn.getSupplyId());
+        cashTxn.setCounterId(counterId);
+        cashTxn.setReferenceNo(clean(dto.getReferenceNo()));
+        cashTxn.setNote(buildPurchaseReturnCashRefundNote(purchaseReturn, supplier));
+        cashTxn.setCreatedBy(processedBy);
+        cashTxn.setCreatedAt(now);
+        cashSessionTransactionRepository.save(cashTxn);
+    }
+
+    return mapPurchaseReturnRefund(saved);
+}
+
+@Override
+public List<PurchaseReturnRefundResponseDto> getPurchaseReturnRefunds(Long purchaseReturnId) {
+    if (!purchaseReturnRepository.existsById(purchaseReturnId)) {
+        throw new RuntimeException("Purchase return not found");
+    }
+    return purchaseReturnRefundRepository.findByPurchaseReturnIdOrderByRefundedAtDesc(purchaseReturnId)
+            .stream().map(this::mapPurchaseReturnRefund).toList();
 }
 
 @Override
@@ -2439,6 +2540,7 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .email(supplier.getEmail())
                 .address(supplier.getAddress())
                 .balance(supplier.getBalance())
+                .advanceCredit(nvlMoney(supplier.getAdvanceCredit()))
                 .isActive(supplier.getIsActive())
                 .createdAt(supplier.getCreatedAt())
                 .updatedAt(supplier.getUpdatedAt())
@@ -2476,6 +2578,23 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
     }
 
     private SupplierPaymentResponseDto mapSupplierPayment(SupplierPayment payment) {
+        List<SupplierPaymentAllocationResponseDto> allocations = supplierPaymentAllocationRepository
+                .findBySupplierPaymentIdOrderByAllocationIdAsc(payment.getSupplierPaymentId())
+                .stream()
+                .map(allocation -> {
+                    Supply supply = supplyRepository.findById(allocation.getSupplyId()).orElse(null);
+                    return SupplierPaymentAllocationResponseDto.builder()
+                            .allocationId(allocation.getAllocationId())
+                            .supplyId(allocation.getSupplyId())
+                            .grnNo(supply != null ? supply.getGrnNo() : null)
+                            .amount(allocation.getAmount())
+                            .paidAmount(supply != null ? supply.getPaidAmount() : null)
+                            .balanceAmount(supply != null ? supply.getBalanceAmount() : null)
+                            .paymentStatus(supply != null ? supply.getPaymentStatus() : null)
+                            .build();
+                }).toList();
+        BigDecimal supplierAdvanceCredit = supplierRepository.findById(payment.getSupplierId())
+                .map(Supplier::getAdvanceCredit).map(this::nvlMoney).orElse(BigDecimal.ZERO);
         return SupplierPaymentResponseDto.builder()
                 .supplierPaymentId(payment.getSupplierPaymentId())
                 .branchId(payment.getBranchId())
@@ -2489,6 +2608,11 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                 .cashSessionId(payment.getCashSessionId())
                 .referenceNo(payment.getReferenceNo())
                 .note(payment.getNote())
+                .allocatedAmount(nvlMoney(payment.getAllocatedAmount()))
+                .advanceCreditAdded(nvlMoney(payment.getAdvanceCreditAdded()))
+                .advanceCreditUsed(nvlMoney(payment.getAdvanceCreditUsed()))
+                .supplierAdvanceCredit(supplierAdvanceCredit)
+                .allocations(allocations)
                 .build();
     }
 
@@ -2647,6 +2771,8 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
 ) {
     return PurchaseReturnResponseDto.builder()
             .purchaseReturnId(purchaseReturn.getPurchaseReturnId())
+            .returnNo(purchaseReturn.getReturnNo() != null
+                    ? purchaseReturn.getReturnNo() : "PR-" + purchaseReturn.getPurchaseReturnId())
             .branchId(purchaseReturn.getBranchId())
             .supplierId(purchaseReturn.getSupplierId())
             .supplyId(purchaseReturn.getSupplyId())
@@ -2656,10 +2782,33 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
             .cashSessionId(purchaseReturn.getCashSessionId())
             .bankReference(purchaseReturn.getBankReference())
             .refundAmount(purchaseReturn.getRefundAmount())
+            .paidAmount(nvlMoney(purchaseReturn.getPaidAmount()))
+            .balanceDue(purchaseReturn.getBalanceDue() != null
+                    ? purchaseReturn.getBalanceDue()
+                    : nvlMoney(purchaseReturn.getRefundAmount()).subtract(nvlMoney(purchaseReturn.getPaidAmount())))
+            .paymentStatus(purchaseReturn.getPaymentStatus() != null
+                    ? purchaseReturn.getPaymentStatus() : "UNPAID")
             .reason(purchaseReturn.getReason())
             .processedBy(purchaseReturn.getProcessedBy())
             .status(purchaseReturn.getStatus())
             .items(items)
+            .build();
+}
+
+private PurchaseReturnRefundResponseDto mapPurchaseReturnRefund(PurchaseReturnRefund refund) {
+    return PurchaseReturnRefundResponseDto.builder()
+            .refundId(refund.getRefundId())
+            .purchaseReturnId(refund.getPurchaseReturnId())
+            .branchId(refund.getBranchId())
+            .amount(refund.getAmount())
+            .refundMethod(refund.getRefundMethod())
+            .referenceNo(refund.getReferenceNo())
+            .bankReference(refund.getBankReference())
+            .counterId(refund.getCounterId())
+            .cashSessionId(refund.getCashSessionId())
+            .processedBy(refund.getProcessedBy())
+            .processedByName(resolveUserName(refund.getProcessedBy()))
+            .refundedAt(refund.getRefundedAt())
             .build();
 }
 

@@ -12,6 +12,7 @@ import java.util.List;
 public class PurchaseReturnResponseDto {
 
     private Long purchaseReturnId;
+    private String returnNo;
     private Long branchId;
     private Long supplierId;
     private Long supplyId;
@@ -22,6 +23,9 @@ public class PurchaseReturnResponseDto {
     private Long cashSessionId;
     private String bankReference;
     private BigDecimal refundAmount;
+    private BigDecimal paidAmount;
+    private BigDecimal balanceDue;
+    private String paymentStatus;
     private String reason;
     private Long processedBy;
     private String status;

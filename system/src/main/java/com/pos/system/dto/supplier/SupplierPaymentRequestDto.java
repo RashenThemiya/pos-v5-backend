@@ -11,11 +11,12 @@ public class SupplierPaymentRequestDto {
     private Long branchId;
     private Long supplierId;
     private Long supplyId;
+    private String grnNo;
     private Long poId;
 
     private BigDecimal amount;
 
-    // CASH, COUNTER_CASH, BANK_TRANSFER, CHEQUE, CARD
+    // CASH, COUNTER_CASH, BANK_TRANSFER, CHEQUE, CARD, ADVANCE_CREDIT
     private String paymentMethod;
 
     private LocalDateTime paymentDate;

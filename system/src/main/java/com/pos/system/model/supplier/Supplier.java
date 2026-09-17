@@ -42,6 +42,8 @@ public class Supplier {
     private String address;
 
     private BigDecimal balance = BigDecimal.ZERO;
+    @Column(precision = 14, scale = 2)
+    private BigDecimal advanceCredit = BigDecimal.ZERO;
     private Boolean isActive = true;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

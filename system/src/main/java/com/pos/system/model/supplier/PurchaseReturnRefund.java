@@ -12,34 +12,26 @@ import java.time.LocalDateTime;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "purchase_returns")
-public class PurchaseReturn {
+@Table(name = "purchase_return_refunds")
+public class PurchaseReturnRefund {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long refundId;
+
+    @Column(nullable = false)
     private Long purchaseReturnId;
-
-    @Column(unique = true)
-    private String returnNo;
-
     @Column(nullable = false)
     private Long branchId;
-
+    @Column(nullable = false, precision = 14, scale = 2)
+    private BigDecimal amount;
     @Column(nullable = false)
-    private Long supplierId;
-
-    private Long supplyId;
-    private LocalDateTime returnDate;
     private String refundMethod;
-    private Long cashSessionId;
+    private String referenceNo;
     private String bankReference;
-    private BigDecimal refundAmount;
-    private BigDecimal paidAmount;
-    private BigDecimal balanceDue;
-    private String paymentStatus;
-    private String reason;
-
+    private Long counterId;
+    private Long cashSessionId;
     @Column(nullable = false)
     private Long processedBy;
-
-    private String status;
+    @Column(nullable = false)
+    private LocalDateTime refundedAt;
 }

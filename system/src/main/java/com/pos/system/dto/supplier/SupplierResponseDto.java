@@ -21,6 +21,7 @@ public class SupplierResponseDto {
     private String email;
     private String address;
     private BigDecimal balance;
+    private BigDecimal advanceCredit;
     private Boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

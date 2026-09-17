@@ -91,6 +91,10 @@ public interface SupplierManagementService {
 
     PurchaseReturnResponseDto createPurchaseReturn(PurchaseReturnRequestDto dto);
 
+    PurchaseReturnRefundResponseDto recordPurchaseReturnRefund(Long purchaseReturnId, PurchaseReturnRefundRequestDto dto);
+
+    List<PurchaseReturnRefundResponseDto> getPurchaseReturnRefunds(Long purchaseReturnId);
+
     PurchaseReturnResponseDto getPurchaseReturnById(Long purchaseReturnId);
 
     List<PurchaseReturnResponseDto> getPurchaseReturnsByBranch(Long branchId);
