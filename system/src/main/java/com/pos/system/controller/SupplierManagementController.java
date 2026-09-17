@@ -218,6 +218,13 @@ public class SupplierManagementController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
+    @PostMapping("/items/bulk")
+    public ResponseEntity<List<SupplierItemResponseDto>> addSupplierItemsBulk(
+            @RequestBody BulkSupplierItemRequestDto dto) {
+        return ResponseEntity.ok(supplierManagementService.addSupplierItemsBulk(dto));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_UPDATE')")
     @PutMapping("/items/{supplierItemId}")
     public ResponseEntity<SupplierItemResponseDto> updateSupplierItem(@PathVariable Long supplierItemId,
                                                                       @RequestBody SupplierItemRequestDto dto) {

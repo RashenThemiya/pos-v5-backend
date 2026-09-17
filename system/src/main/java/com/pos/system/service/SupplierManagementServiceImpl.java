@@ -186,6 +186,36 @@ private final PurchaseReturnItemRepository purchaseReturnItemRepository;
     }
 
     @Override
+    public List<SupplierItemResponseDto> addSupplierItemsBulk(BulkSupplierItemRequestDto dto) {
+        if (dto == null || dto.getBranchId() == null || dto.getSupplierId() == null) {
+            throw new RuntimeException("Branch and supplier are required");
+        }
+        if (dto.getItems() == null || dto.getItems().isEmpty()) {
+            throw new RuntimeException("At least one supplier item is required");
+        }
+
+        return dto.getItems().stream()
+                .map(item -> {
+                    if (item == null) {
+                        throw new RuntimeException("Supplier item cannot be null");
+                    }
+
+                    SupplierItemRequestDto request = new SupplierItemRequestDto();
+                    request.setBranchId(dto.getBranchId());
+                    request.setSupplierId(dto.getSupplierId());
+                    request.setItemId(item.getItemId());
+                    request.setVariantId(item.getVariantId());
+                    request.setUnitId(item.getUnitId());
+                    request.setLastPurchaseCost(item.getLastPurchaseCost());
+                    request.setDefaultCostPrice(item.getDefaultCostPrice());
+                    request.setIsPreferred(item.getIsPreferred());
+                    request.setIsActive(item.getIsActive());
+                    return addSupplierItem(request);
+                })
+                .toList();
+    }
+
+    @Override
     public SupplierItemResponseDto updateSupplierItem(Long supplierItemId, SupplierItemRequestDto dto) {
         SupplierItem supplierItem = supplierItemRepository.findById(supplierItemId)
                 .orElseThrow(() -> new RuntimeException("Supplier item not found"));

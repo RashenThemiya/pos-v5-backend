@@ -25,6 +25,8 @@ public interface SupplierManagementService {
 
     SupplierItemResponseDto addSupplierItem(SupplierItemRequestDto dto);
 
+    List<SupplierItemResponseDto> addSupplierItemsBulk(BulkSupplierItemRequestDto dto);
+
     SupplierItemResponseDto updateSupplierItem(Long supplierItemId, SupplierItemRequestDto dto);
 
     List<SupplierItemResponseDto> getSupplierItemsBySupplier(Long branchId, Long supplierId);
