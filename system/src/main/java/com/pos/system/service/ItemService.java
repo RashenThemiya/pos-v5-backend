@@ -536,6 +536,9 @@ public class ItemService {
         item.setBranchId(request.getBranchId());
         item.setSku(request.getSku().trim());
         item.setName(request.getName().trim());
+        if (StringUtils.hasText(request.getImage())) {
+            item.setImage(request.getImage().trim());
+        }
         item.setCategoryId(request.getCategoryId());
         item.setBrandId(request.getBrandId());
         item.setIsWeighed(request.getIsWeighed() != null ? request.getIsWeighed() : false);
