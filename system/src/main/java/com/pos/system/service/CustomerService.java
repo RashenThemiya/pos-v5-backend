@@ -127,6 +127,11 @@ public class CustomerService {
                     cb.equal(root.get("branchId"), request.getBranchId()));
         }
 
+        if (request.getActive() != null) {
+            specification = specification.and((root, query, cb) ->
+                    cb.equal(root.get("isActive"), request.getActive()));
+        }
+
         if (StringUtils.hasText(request.getQ())) {
             specification = specification.and(buildSearchSpecification(request.getQ()));
         }

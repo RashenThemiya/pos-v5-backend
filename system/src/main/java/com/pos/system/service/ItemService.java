@@ -149,6 +149,18 @@ public class ItemService {
             specification = specification.and((root, query, cb) -> cb.equal(root.get("branchId"), request.getBranchId()));
         }
 
+        if (request.getCategoryId() != null) {
+            specification = specification.and((root, query, cb) -> cb.equal(root.get("categoryId"), request.getCategoryId()));
+        }
+
+        if (request.getBrandId() != null) {
+            specification = specification.and((root, query, cb) -> cb.equal(root.get("brandId"), request.getBrandId()));
+        }
+
+        if (request.getActive() != null) {
+            specification = specification.and((root, query, cb) -> cb.equal(root.get("isActive"), request.getActive()));
+        }
+
         if (StringUtils.hasText(request.getQ())) {
             specification = specification.and(buildSearchSpecification(request.getBranchId(), request.getQ()));
         }

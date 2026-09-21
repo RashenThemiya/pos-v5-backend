@@ -3,6 +3,7 @@ package com.pos.system.controller;
 import com.pos.system.dto.supplier.*;
 import com.pos.system.service.SupplierManagementService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
@@ -43,6 +44,15 @@ public class SupplierManagementController {
     @GetMapping("/branch/{branchId}")
     public ResponseEntity<List<SupplierResponseDto>> getSuppliersByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(supplierManagementService.getSuppliersByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_VIEW')")
+    @GetMapping("/branch/{branchId}/paged")
+    public ResponseEntity<Page<SupplierResponseDto>> searchSuppliersByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute SupplierSearchRequestDto request,
+            @PageableDefault(size = 25, sort = "updatedAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(supplierManagementService.searchSuppliersByBranch(branchId, request, pageable));
     }
 
     // PURCHASE ORDER
@@ -109,6 +119,15 @@ public class SupplierManagementController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
+    @GetMapping("/supplies/branch/{branchId}/paged")
+    public ResponseEntity<SupplyPageResponseDto> searchSuppliesByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute SupplySearchRequestDto request,
+            @PageableDefault(size = 25, sort = "supplyDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(supplierManagementService.searchSuppliesByBranch(branchId, request, pageable));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")
     @GetMapping("/supplies/branch/{branchId}/item/{itemId}")
     public ResponseEntity<List<SupplyResponseDto>> getSuppliesByItem(
             @PathVariable Long branchId, @PathVariable Long itemId) {
@@ -146,6 +165,15 @@ public class SupplierManagementController {
     @GetMapping("/payments/branch/{branchId}")
     public ResponseEntity<List<SupplierPaymentResponseDto>> getPaymentsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(supplierManagementService.getPaymentsByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
+    @GetMapping("/payments/branch/{branchId}/paged")
+    public ResponseEntity<SupplierPaymentPageResponseDto> searchPaymentsByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute SupplierPaymentSearchRequestDto request,
+            @PageableDefault(size = 25, sort = "paymentDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(supplierManagementService.searchPaymentsByBranch(branchId, request, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_PAYMENT_VIEW')")
@@ -200,6 +228,15 @@ public class SupplierManagementController {
     @GetMapping("/purchase-returns/branch/{branchId}")
     public ResponseEntity<List<PurchaseReturnResponseDto>> getPurchaseReturnsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(supplierManagementService.getPurchaseReturnsByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
+    @GetMapping("/purchase-returns/branch/{branchId}/paged")
+    public ResponseEntity<PurchaseReturnPageResponseDto> searchPurchaseReturnsByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute PurchaseReturnSearchRequestDto request,
+            @PageableDefault(size = 25, sort = "returnDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(supplierManagementService.searchPurchaseReturnsByBranch(branchId, request, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")

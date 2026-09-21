@@ -6,4 +6,5 @@ import lombok.Data;
 public class CustomerSearchRequest {
     private String q;
     private Long branchId;
+    private Boolean active;
 }
