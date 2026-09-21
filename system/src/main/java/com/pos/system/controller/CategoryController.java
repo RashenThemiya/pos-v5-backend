@@ -2,10 +2,14 @@ package com.pos.system.controller;
 
 import com.pos.system.dto.category.CategoryRequest;
 import com.pos.system.dto.category.CategoryResponse;
+import com.pos.system.dto.category.CategorySearchRequestDto;
 import com.pos.system.dto.common.ApiResponse;
 import com.pos.system.service.CategoryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -34,6 +38,19 @@ public class CategoryController {
     public ResponseEntity<ApiResponse<List<CategoryResponse>>> getAllByBranch(@PathVariable Long branchId) {
         List<CategoryResponse> list = categoryService.getAllByBranch(branchId);
         return ResponseEntity.ok(ApiResponse.success("Categories fetched successfully", list));
+    }
+
+    // GET /api/categories/branch/{branchId}/paged
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('CATEGORY_VIEW')")
+    @GetMapping("/branch/{branchId}/paged")
+    public ResponseEntity<ApiResponse<com.pos.system.dto.category.CategoryPageResponseDto>> searchByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute CategorySearchRequestDto request,
+            @PageableDefault(size = 25, sort = "categoryId", direction = Sort.Direction.ASC) Pageable pageable) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Categories fetched successfully",
+                categoryService.searchByBranch(branchId, request, pageable)
+        ));
     }
 
     // GET /api/categories/branch/{branchId}/active

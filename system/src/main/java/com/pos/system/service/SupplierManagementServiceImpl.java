@@ -18,6 +18,7 @@ import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
@@ -143,6 +144,33 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .stream()
                 .map(this::mapSupplier)
                 .toList();
+    }
+
+    @Override
+    public Page<SupplierResponseDto> searchSuppliersByBranch(
+            Long branchId,
+            SupplierSearchRequestDto request,
+            Pageable pageable
+    ) {
+        SupplierSearchRequestDto safeRequest = request != null ? request : new SupplierSearchRequestDto();
+        Specification<Supplier> specification = (root, query, cb) -> cb.equal(root.get("branchId"), branchId);
+
+        if (safeRequest.getActive() != null) {
+            specification = specification.and((root, query, cb) ->
+                    cb.equal(root.get("isActive"), safeRequest.getActive()));
+        }
+
+        if (StringUtils.hasText(safeRequest.getQ())) {
+            String like = "%" + safeRequest.getQ().trim().toLowerCase() + "%";
+            specification = specification.and((root, query, cb) -> cb.or(
+                    cb.like(cb.lower(root.get("name")), like),
+                    cb.like(cb.lower(root.get("contactPerson")), like),
+                    cb.like(cb.lower(root.get("phone")), like),
+                    cb.like(cb.lower(root.get("email")), like)
+            ));
+        }
+
+        return supplierRepository.findAll(specification, pageable).map(this::mapSupplier);
     }
 
     // =========================
@@ -728,6 +756,45 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         return normalizedStatus.equals(normalizedFilter);
     }
 
+    private jakarta.persistence.criteria.Predicate statusPredicate(
+            jakarta.persistence.criteria.CriteriaBuilder cb,
+            jakarta.persistence.criteria.Expression<String> statusExpression,
+            String filter
+    ) {
+        String normalized = safe(filter).toUpperCase();
+        if ("OPEN".equals(normalized) || "PENDING".equals(normalized)) {
+            return statusExpression.in("OPEN", "PENDING", "NOT_RECEIVED");
+        }
+        if ("PARTIAL".equals(normalized) || "PARTIALLY_RECEIVED".equals(normalized)) {
+            return statusExpression.in("PARTIAL", "PARTIALLY_RECEIVED");
+        }
+        if ("COMPLETED".equals(normalized) || "FULLY_RECEIVED".equals(normalized)) {
+            return statusExpression.in("COMPLETED", "FULLY_RECEIVED");
+        }
+        if ("CANCELLED".equals(normalized) || "CANCELED".equals(normalized)) {
+            return statusExpression.in("CANCELLED", "CANCELED");
+        }
+        return cb.equal(statusExpression, normalized);
+    }
+
+    private boolean matchesSupplyStatus(String status, String filter) {
+        String normalizedStatus = safe(status).toUpperCase();
+        String normalizedFilter = safe(filter).toUpperCase();
+        if ("PENDING".equals(normalizedFilter)) {
+            return "PENDING".equals(normalizedStatus) || "NOT_RECEIVED".equals(normalizedStatus);
+        }
+        if ("PARTIAL".equals(normalizedFilter)) {
+            return "PARTIAL".equals(normalizedStatus) || "PARTIALLY_RECEIVED".equals(normalizedStatus);
+        }
+        if ("COMPLETED".equals(normalizedFilter)) {
+            return "COMPLETED".equals(normalizedStatus) || "FULLY_RECEIVED".equals(normalizedStatus);
+        }
+        if ("CANCELLED".equals(normalizedFilter)) {
+            return "CANCELLED".equals(normalizedStatus) || "CANCELED".equals(normalizedStatus);
+        }
+        return normalizedStatus.equals(normalizedFilter);
+    }
+
     private boolean matchesExactStatus(String status, String filter) {
         return !StringUtils.hasText(filter)
                 || "ALL".equalsIgnoreCase(filter)
@@ -1119,6 +1186,100 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
     }
 
     @Override
+    public SupplyPageResponseDto searchSuppliesByBranch(
+            Long branchId,
+            SupplySearchRequestDto request,
+            Pageable pageable
+    ) {
+        SupplySearchRequestDto filters = request != null ? request : new SupplySearchRequestDto();
+        Specification<Supply> specification = buildSupplySearchSpecification(branchId, filters);
+        Page<Supply> page = supplyRepository.findAll(specification, pageable);
+        List<Supply> matches = supplyRepository.findAll(specification);
+
+        return SupplyPageResponseDto.builder()
+                .content(page.getContent().stream().map(supply -> getSupplyById(supply.getSupplyId())).toList())
+                .page(page.getNumber())
+                .pageSize(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .sort(formatPageSort(pageable))
+                .summary(buildSupplySummary(matches))
+                .build();
+    }
+
+    private Specification<Supply> buildSupplySearchSpecification(Long branchId, SupplySearchRequestDto request) {
+        return (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("branchId"), branchId));
+
+            if (request.getSupplierId() != null) {
+                predicates.add(cb.equal(root.get("supplierId"), request.getSupplierId()));
+            }
+
+            if (StringUtils.hasText(request.getStatus()) && !"ALL".equalsIgnoreCase(request.getStatus())) {
+                predicates.add(statusPredicate(cb, cb.upper(root.get("status")), request.getStatus()));
+            }
+
+            if (StringUtils.hasText(request.getPaymentStatus()) && !"ALL".equalsIgnoreCase(request.getPaymentStatus())) {
+                predicates.add(cb.equal(cb.upper(root.get("paymentStatus")), request.getPaymentStatus().trim().toUpperCase()));
+            }
+
+            if (request.getDateFrom() != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("supplyDate"), request.getDateFrom().atStartOfDay()));
+            }
+
+            if (request.getDateTo() != null) {
+                predicates.add(cb.lessThan(root.get("supplyDate"), request.getDateTo().plusDays(1).atStartOfDay()));
+            }
+
+            if (StringUtils.hasText(request.getQ())) {
+                String pattern = "%" + request.getQ().trim().toLowerCase() + "%";
+
+                var supplierSubquery = query.subquery(Long.class);
+                var supplierRoot = supplierSubquery.from(Supplier.class);
+                supplierSubquery.select(supplierRoot.get("supplierId"))
+                        .where(
+                                cb.equal(supplierRoot.get("supplierId"), root.get("supplierId")),
+                                cb.equal(supplierRoot.get("branchId"), branchId),
+                                cb.or(
+                                        cb.like(cb.lower(supplierRoot.get("name")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("contactPerson")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("phone")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("email")), pattern)
+                                )
+                        );
+
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("grnNo")), pattern),
+                        cb.like(cb.lower(root.get("invoiceNo")), pattern),
+                        cb.like(cb.lower(root.get("status")), pattern),
+                        cb.like(cb.lower(root.get("paymentStatus")), pattern),
+                        cb.like(cb.lower(root.get("paymentMethod")), pattern),
+                        cb.like(cb.lower(root.get("notes")), pattern),
+                        cb.exists(supplierSubquery)
+                ));
+            }
+
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
+    }
+
+    private SupplySummaryDto buildSupplySummary(List<Supply> rows) {
+        return SupplySummaryDto.builder()
+                .total(rows.size())
+                .pending(rows.stream().filter(row -> matchesSupplyStatus(row.getStatus(), "PENDING")).count())
+                .partial(rows.stream().filter(row -> matchesSupplyStatus(row.getStatus(), "PARTIAL")).count())
+                .completed(rows.stream().filter(row -> matchesSupplyStatus(row.getStatus(), "COMPLETED")).count())
+                .cancelled(rows.stream().filter(row -> matchesSupplyStatus(row.getStatus(), "CANCELLED")).count())
+                .unpaid(rows.stream().filter(row -> "UNPAID".equalsIgnoreCase(safe(row.getPaymentStatus()))).count())
+                .partiallyPaid(rows.stream().filter(row -> "PARTIAL".equalsIgnoreCase(safe(row.getPaymentStatus()))).count())
+                .paid(rows.stream().filter(row -> "PAID".equalsIgnoreCase(safe(row.getPaymentStatus()))).count())
+                .totalAmount(rows.stream().map(row -> nvlMoney(row.getTotal())).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .balanceAmount(rows.stream().map(row -> nvlMoney(row.getBalanceAmount())).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .build();
+    }
+
+    @Override
     public List<SupplyResponseDto> getSuppliesByItem(Long branchId, Long itemId) {
         return supplyRepository.findByBranchIdAndItemId(branchId, itemId)
                 .stream().map(s -> getSupplyById(s.getSupplyId())).toList();
@@ -1344,6 +1505,89 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                 .stream()
                 .map(this::mapSupplierPayment)
                 .toList();
+    }
+
+    @Override
+    public SupplierPaymentPageResponseDto searchPaymentsByBranch(
+            Long branchId,
+            SupplierPaymentSearchRequestDto request,
+            Pageable pageable
+    ) {
+        SupplierPaymentSearchRequestDto filters = request != null ? request : new SupplierPaymentSearchRequestDto();
+        Specification<SupplierPayment> specification = buildSupplierPaymentSearchSpecification(branchId, filters);
+        Page<SupplierPayment> page = supplierPaymentRepository.findAll(specification, pageable);
+        List<SupplierPayment> matches = supplierPaymentRepository.findAll(specification);
+
+        return SupplierPaymentPageResponseDto.builder()
+                .content(page.getContent().stream().map(this::mapSupplierPayment).toList())
+                .page(page.getNumber())
+                .pageSize(page.getSize())
+                .totalElements(page.getTotalElements())
+                .totalPages(page.getTotalPages())
+                .sort(formatPageSort(pageable))
+                .summary(buildSupplierPaymentSummary(matches))
+                .build();
+    }
+
+    private Specification<SupplierPayment> buildSupplierPaymentSearchSpecification(
+            Long branchId,
+            SupplierPaymentSearchRequestDto request
+    ) {
+        return (root, query, cb) -> {
+            List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+            predicates.add(cb.equal(root.get("branchId"), branchId));
+
+            if (request.getSupplierId() != null) {
+                predicates.add(cb.equal(root.get("supplierId"), request.getSupplierId()));
+            }
+
+            if (StringUtils.hasText(request.getPaymentMethod()) && !"ALL".equalsIgnoreCase(request.getPaymentMethod())) {
+                predicates.add(cb.equal(cb.upper(root.get("paymentMethod")), request.getPaymentMethod().trim().toUpperCase()));
+            }
+
+            if (request.getDateFrom() != null) {
+                predicates.add(cb.greaterThanOrEqualTo(root.get("paymentDate"), request.getDateFrom().atStartOfDay()));
+            }
+
+            if (request.getDateTo() != null) {
+                predicates.add(cb.lessThan(root.get("paymentDate"), request.getDateTo().plusDays(1).atStartOfDay()));
+            }
+
+            if (StringUtils.hasText(request.getQ())) {
+                String pattern = "%" + request.getQ().trim().toLowerCase() + "%";
+
+                var supplierSubquery = query.subquery(Long.class);
+                var supplierRoot = supplierSubquery.from(Supplier.class);
+                supplierSubquery.select(supplierRoot.get("supplierId"))
+                        .where(
+                                cb.equal(supplierRoot.get("supplierId"), root.get("supplierId")),
+                                cb.equal(supplierRoot.get("branchId"), branchId),
+                                cb.or(
+                                        cb.like(cb.lower(supplierRoot.get("name")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("contactPerson")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("phone")), pattern),
+                                        cb.like(cb.lower(supplierRoot.get("email")), pattern)
+                                )
+                        );
+
+                predicates.add(cb.or(
+                        cb.like(cb.lower(root.get("paymentMethod")), pattern),
+                        cb.like(cb.lower(root.get("referenceNo")), pattern),
+                        cb.like(cb.lower(root.get("note")), pattern),
+                        cb.exists(supplierSubquery)
+                ));
+            }
+
+            return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+        };
+    }
+
+    private SupplierPaymentSummaryDto buildSupplierPaymentSummary(List<SupplierPayment> rows) {
+        return SupplierPaymentSummaryDto.builder()
+                .total(rows.size())
+                .supplierCount(rows.stream().map(SupplierPayment::getSupplierId).filter(id -> id != null).distinct().count())
+                .totalAmount(rows.stream().map(payment -> nvlMoney(payment.getAmount())).reduce(BigDecimal.ZERO, BigDecimal::add))
+                .build();
     }
 
     @Override
@@ -2382,6 +2626,113 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsByBranch(Long branchId)
 }
 
 @Override
+public PurchaseReturnPageResponseDto searchPurchaseReturnsByBranch(
+        Long branchId,
+        PurchaseReturnSearchRequestDto request,
+        Pageable pageable
+) {
+    PurchaseReturnSearchRequestDto filters = request != null ? request : new PurchaseReturnSearchRequestDto();
+    Specification<PurchaseReturn> specification = buildPurchaseReturnSearchSpecification(branchId, filters);
+    Page<PurchaseReturn> page = purchaseReturnRepository.findAll(specification, pageable);
+    List<PurchaseReturn> matches = purchaseReturnRepository.findAll(specification);
+
+    return PurchaseReturnPageResponseDto.builder()
+            .content(page.getContent().stream().map(pr -> getPurchaseReturnById(pr.getPurchaseReturnId())).toList())
+            .page(page.getNumber())
+            .pageSize(page.getSize())
+            .totalElements(page.getTotalElements())
+            .totalPages(page.getTotalPages())
+            .sort(formatPageSort(pageable))
+            .summary(buildPurchaseReturnSummary(matches))
+            .build();
+}
+
+private Specification<PurchaseReturn> buildPurchaseReturnSearchSpecification(
+        Long branchId,
+        PurchaseReturnSearchRequestDto request
+) {
+    return (root, query, cb) -> {
+        List<jakarta.persistence.criteria.Predicate> predicates = new ArrayList<>();
+        predicates.add(cb.equal(root.get("branchId"), branchId));
+
+        if (request.getSupplierId() != null) {
+            predicates.add(cb.equal(root.get("supplierId"), request.getSupplierId()));
+        }
+
+        if (StringUtils.hasText(request.getStatus()) && !"ALL".equalsIgnoreCase(request.getStatus())) {
+            String normalizedStatus = request.getStatus().trim().toUpperCase();
+            if ("PENDING".equals(normalizedStatus)) {
+                predicates.add(cb.not(cb.upper(root.get("status")).in("COMPLETED", "CANCELLED", "CANCELED")));
+            } else {
+                predicates.add(statusPredicate(cb, cb.upper(root.get("status")), request.getStatus()));
+            }
+        }
+
+        if (request.getDateFrom() != null) {
+            predicates.add(cb.greaterThanOrEqualTo(root.get("returnDate"), request.getDateFrom().atStartOfDay()));
+        }
+
+        if (request.getDateTo() != null) {
+            predicates.add(cb.lessThan(root.get("returnDate"), request.getDateTo().plusDays(1).atStartOfDay()));
+        }
+
+        if (StringUtils.hasText(request.getQ())) {
+            String pattern = "%" + request.getQ().trim().toLowerCase() + "%";
+
+            var supplierSubquery = query.subquery(Long.class);
+            var supplierRoot = supplierSubquery.from(Supplier.class);
+            supplierSubquery.select(supplierRoot.get("supplierId"))
+                    .where(
+                            cb.equal(supplierRoot.get("supplierId"), root.get("supplierId")),
+                            cb.equal(supplierRoot.get("branchId"), branchId),
+                            cb.or(
+                                    cb.like(cb.lower(supplierRoot.get("name")), pattern),
+                                    cb.like(cb.lower(supplierRoot.get("contactPerson")), pattern),
+                                    cb.like(cb.lower(supplierRoot.get("phone")), pattern),
+                                    cb.like(cb.lower(supplierRoot.get("email")), pattern)
+                            )
+                    );
+
+            var supplySubquery = query.subquery(Long.class);
+            var supplyRoot = supplySubquery.from(Supply.class);
+            supplySubquery.select(supplyRoot.get("supplyId"))
+                    .where(
+                            cb.equal(supplyRoot.get("supplyId"), root.get("supplyId")),
+                            cb.equal(supplyRoot.get("branchId"), branchId),
+                            cb.or(
+                                    cb.like(cb.lower(supplyRoot.get("grnNo")), pattern),
+                                    cb.like(cb.lower(supplyRoot.get("invoiceNo")), pattern)
+                            )
+                    );
+
+            predicates.add(cb.or(
+                    cb.like(cb.lower(root.get("returnNo")), pattern),
+                    cb.like(cb.lower(root.get("refundMethod")), pattern),
+                    cb.like(cb.lower(root.get("bankReference")), pattern),
+                    cb.like(cb.lower(root.get("reason")), pattern),
+                    cb.like(cb.lower(root.get("status")), pattern),
+                    cb.exists(supplierSubquery),
+                    cb.exists(supplySubquery)
+            ));
+        }
+
+        return cb.and(predicates.toArray(new jakarta.persistence.criteria.Predicate[0]));
+    };
+}
+
+private PurchaseReturnSummaryDto buildPurchaseReturnSummary(List<PurchaseReturn> rows) {
+    return PurchaseReturnSummaryDto.builder()
+            .total(rows.size())
+            .pending(rows.stream().filter(row -> {
+                String status = safe(row.getStatus()).toUpperCase();
+                return !"COMPLETED".equals(status) && !"CANCELLED".equals(status) && !"CANCELED".equals(status);
+            }).count())
+            .completed(rows.stream().filter(row -> "COMPLETED".equalsIgnoreCase(safe(row.getStatus()))).count())
+            .cancelled(rows.stream().filter(row -> "CANCELLED".equalsIgnoreCase(safe(row.getStatus())) || "CANCELED".equalsIgnoreCase(safe(row.getStatus()))).count())
+            .build();
+}
+
+@Override
 public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupplier(Long branchId, Long supplierId) {
     return purchaseReturnRepository.findByBranchIdAndSupplierIdOrderByReturnDateDesc(branchId, supplierId)
             .stream()
@@ -2593,12 +2944,15 @@ public List<PurchaseReturnResponseDto> getPurchaseReturnsBySupply(Long supplyId)
                             .paymentStatus(supply != null ? supply.getPaymentStatus() : null)
                             .build();
                 }).toList();
-        BigDecimal supplierAdvanceCredit = supplierRepository.findById(payment.getSupplierId())
-                .map(Supplier::getAdvanceCredit).map(this::nvlMoney).orElse(BigDecimal.ZERO);
+        Supplier supplier = supplierRepository.findById(payment.getSupplierId()).orElse(null);
+        BigDecimal supplierAdvanceCredit = supplier != null
+                ? nvlMoney(supplier.getAdvanceCredit())
+                : BigDecimal.ZERO;
         return SupplierPaymentResponseDto.builder()
                 .supplierPaymentId(payment.getSupplierPaymentId())
                 .branchId(payment.getBranchId())
                 .supplierId(payment.getSupplierId())
+                .supplierName(supplier != null ? supplier.getName() : null)
                 .supplyId(payment.getSupplyId())
                 .poId(payment.getPoId())
                 .amount(payment.getAmount())

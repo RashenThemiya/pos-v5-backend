@@ -14,6 +14,7 @@ public class SupplierPaymentResponseDto {
     private Long supplierPaymentId;
     private Long branchId;
     private Long supplierId;
+    private String supplierName;
     private Long supplyId;
     private Long poId;
 

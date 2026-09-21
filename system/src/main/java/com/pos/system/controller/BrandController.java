@@ -2,10 +2,14 @@ package com.pos.system.controller;
 
 import com.pos.system.dto.brand.BrandRequest;
 import com.pos.system.dto.brand.BrandResponse;
+import com.pos.system.dto.brand.BrandSearchRequestDto;
 import com.pos.system.dto.common.ApiResponse;
 import com.pos.system.service.BrandService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -32,6 +36,19 @@ public class BrandController {
     @GetMapping("/branch/{branchId}")
     public ResponseEntity<ApiResponse<List<BrandResponse>>> getAllByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(ApiResponse.success("Brands fetched successfully", brandService.getAllByBranch(branchId)));
+    }
+
+    // GET /api/brands/branch/{branchId}/paged
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('BRAND_VIEW')")
+    @GetMapping("/branch/{branchId}/paged")
+    public ResponseEntity<ApiResponse<com.pos.system.dto.brand.BrandPageResponseDto>> searchByBranch(
+            @PathVariable Long branchId,
+            @ModelAttribute BrandSearchRequestDto request,
+            @PageableDefault(size = 25, sort = "brandId", direction = Sort.Direction.ASC) Pageable pageable) {
+        return ResponseEntity.ok(ApiResponse.success(
+                "Brands fetched successfully",
+                brandService.searchByBranch(branchId, request, pageable)
+        ));
     }
 
     // GET /api/brands/branch/{branchId}/active

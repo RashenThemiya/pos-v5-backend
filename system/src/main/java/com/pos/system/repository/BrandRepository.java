@@ -2,13 +2,14 @@ package com.pos.system.repository;
 
 import com.pos.system.model.catalog.Brand;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
 
-public interface BrandRepository extends JpaRepository<Brand, Long> {
+public interface BrandRepository extends JpaRepository<Brand, Long>, JpaSpecificationExecutor<Brand> {
     List<Brand> findByBranchId(Long branchId);
     List<Brand> findByBranchIdAndIsActive(Long branchId, Boolean isActive);
     boolean existsByBranchIdAndName(Long branchId, String name);

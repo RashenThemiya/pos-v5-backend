@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.supplier.*;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.util.List;
@@ -18,6 +19,12 @@ public interface SupplierManagementService {
     SupplierResponseDto getSupplierById(Long supplierId);
 
     List<SupplierResponseDto> getSuppliersByBranch(Long branchId);
+
+    Page<SupplierResponseDto> searchSuppliersByBranch(
+            Long branchId,
+            SupplierSearchRequestDto request,
+            Pageable pageable
+    );
 
     // =========================
     // SUPPLIER ITEMS
@@ -63,6 +70,12 @@ public interface SupplierManagementService {
 
     List<SupplyResponseDto> getSuppliesByBranch(Long branchId);
 
+    SupplyPageResponseDto searchSuppliesByBranch(
+            Long branchId,
+            SupplySearchRequestDto request,
+            Pageable pageable
+    );
+
     List<SupplyResponseDto> getSuppliesByItem(Long branchId, Long itemId);
 
     List<SupplyResponseDto> getUnpaidSuppliesByBranch(Long branchId);
@@ -78,6 +91,12 @@ public interface SupplierManagementService {
     SupplierPaymentResponseDto getSupplierPaymentById(Long paymentId);
 
     List<SupplierPaymentResponseDto> getPaymentsByBranch(Long branchId);
+
+    SupplierPaymentPageResponseDto searchPaymentsByBranch(
+            Long branchId,
+            SupplierPaymentSearchRequestDto request,
+            Pageable pageable
+    );
 
     List<SupplierPaymentResponseDto> getPaymentsBySupplier(Long branchId, Long supplierId);
 
@@ -98,6 +117,12 @@ public interface SupplierManagementService {
     PurchaseReturnResponseDto getPurchaseReturnById(Long purchaseReturnId);
 
     List<PurchaseReturnResponseDto> getPurchaseReturnsByBranch(Long branchId);
+
+    PurchaseReturnPageResponseDto searchPurchaseReturnsByBranch(
+            Long branchId,
+            PurchaseReturnSearchRequestDto request,
+            Pageable pageable
+    );
 
     List<PurchaseReturnResponseDto> getPurchaseReturnsBySupplier(Long branchId, Long supplierId);
 

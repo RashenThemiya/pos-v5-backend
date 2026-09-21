@@ -13,4 +13,6 @@ public class CategoryResponse {
     private String parentName;
     private Boolean isActive;
     private LocalDateTime createdAt;
+    private Long productCount;
+    private Long subcategoryCount;
 }

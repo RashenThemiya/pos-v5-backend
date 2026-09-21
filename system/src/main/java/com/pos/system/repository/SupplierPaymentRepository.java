@@ -2,13 +2,14 @@ package com.pos.system.repository;
 
 import com.pos.system.model.supplier.SupplierPayment;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.Collection;
 import java.util.List;
 
-public interface SupplierPaymentRepository extends JpaRepository<SupplierPayment, Long> {
+public interface SupplierPaymentRepository extends JpaRepository<SupplierPayment, Long>, JpaSpecificationExecutor<SupplierPayment> {
     List<SupplierPayment> findBySupplierId(Long supplierId);
     List<SupplierPayment> findBySupplyId(Long supplyId);
     List<SupplierPayment> findByPoId(Long poId);
