@@ -37,10 +37,11 @@ public class ProcessSaleRequest {
 
     @Data
     public static class PaymentLineDto {
-        private String paymentMethod;       // CASH, CARD, CREDIT, CHEQUE
+        private String paymentMethod;       // CASH, CARD, CREDIT, CUSTOMER_BALANCE, RETURN_VOUCHER, CHEQUE
         private BigDecimal amount;
         private BigDecimal tenderedAmount;  // actual cash handed over (for change calculation)
         private String referenceNo;         // card ref no, cheque no, etc.
+        private String voucherCode;
         private String note;
     }
 }

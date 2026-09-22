@@ -143,4 +143,10 @@ public class SalesController {
     public ResponseEntity<List<SalesReturnResponse>> getReturnsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(salesService.getReturnsByBranch(branchId));
     }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
+    @GetMapping("/return-vouchers/{voucherNoOrCode}")
+    public ResponseEntity<ReturnVoucherResponse> getReturnVoucher(@PathVariable String voucherNoOrCode) {
+        return ResponseEntity.ok(salesService.getReturnVoucher(voucherNoOrCode));
+    }
 }

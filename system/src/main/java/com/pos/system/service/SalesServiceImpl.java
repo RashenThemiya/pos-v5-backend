@@ -1,5 +1,6 @@
 package com.pos.system.service;
 
+import com.pos.system.dto.customer.CustomerResponse;
 import com.pos.system.dto.sale.*;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
@@ -8,6 +9,7 @@ import com.pos.system.model.catalog.ScaleBarcodeSetting;
 import com.pos.system.model.catalog.ScaleItemMapping;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.cash.CashSessionTransaction;
+import com.pos.system.model.customer.Customer;
 import com.pos.system.model.promotion.Promotion;
 import com.pos.system.model.promotion.PromotionBatch;
 import com.pos.system.model.promotion.PromotionItem;
@@ -24,12 +26,14 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -58,6 +62,10 @@ public class SalesServiceImpl implements SalesService {
     private final PromotionRepository promotionRepository;
     private final PromotionItemRepository promotionItemRepository;
     private final PromotionBatchRepository promotionBatchRepository;
+    private final CreditNoteRepository creditNoteRepository;
+    private final ReturnVoucherRepository returnVoucherRepository;
+    private final ReturnVoucherTransactionRepository returnVoucherTransactionRepository;
+    private final CustomerRepository customerRepository;
     private final CustomerService customerService;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
@@ -315,9 +323,13 @@ public class SalesServiceImpl implements SalesService {
         }
 
         for (PaymentRequest.PaymentLineDto line : request.getPayments()) {
+            String paymentMethod = normalizePaymentMethod(line.getPaymentMethod());
             BigDecimal remainingDue = orderTotal.subtract(runningPaid).max(BigDecimal.ZERO);
             BigDecimal appliedAmount = resolveAppliedPaymentAmount(line, remainingDue);
             BigDecimal tenderedAmount = resolveTenderedAmount(line, appliedAmount);
+            String referenceNo = "RETURN_VOUCHER".equals(paymentMethod)
+                    ? normalizeVoucherCode(line.getVoucherCode() != null ? line.getVoucherCode() : line.getReferenceNo())
+                    : line.getReferenceNo();
 
             Payment payment = new Payment();
             payment.setBranchId(order.getBranchId());
@@ -327,16 +339,16 @@ public class SalesServiceImpl implements SalesService {
             payment.setAmount(appliedAmount);
             payment.setTenderedAmount(tenderedAmount);
             payment.setChangeAmount(resolveChangeAmount(line, tenderedAmount, appliedAmount));
-            payment.setPaymentMethod(line.getPaymentMethod());
+            payment.setPaymentMethod(paymentMethod);
             payment.setPaymentDate(LocalDateTime.now());
             payment.setReceivedBy(request.getReceivedBy());
-            payment.setReferenceNo(line.getReferenceNo());
+            payment.setReferenceNo(referenceNo);
             payment.setNote(line.getNote());
             Payment savedPayment = paymentRepository.save(payment);
 
             runningPaid = runningPaid.add(appliedAmount);
 
-            if ("CREDIT".equalsIgnoreCase(line.getPaymentMethod())) {
+            if ("CREDIT".equals(paymentMethod)) {
                 if (order.getCustomerId() == null) {
                     throw new RuntimeException("Customer is required for credit payments");
                 }
@@ -347,6 +359,19 @@ public class SalesServiceImpl implements SalesService {
                         order.getInvoiceNo(),
                         request.getReceivedBy()
                 );
+            } else if ("CUSTOMER_BALANCE".equals(paymentMethod)) {
+                if (order.getCustomerId() == null) {
+                    throw new RuntimeException("Customer is required for customer credit payments");
+                }
+                customerService.applyCustomerCreditPayment(
+                        order.getCustomerId(),
+                        appliedAmount,
+                        order.getOrderId(),
+                        order.getInvoiceNo(),
+                        request.getReceivedBy()
+                );
+            } else if ("RETURN_VOUCHER".equals(paymentMethod)) {
+                redeemReturnVoucherForSale(referenceNo, appliedAmount, order, request.getReceivedBy());
             }
 
             // write cash session transaction
@@ -355,7 +380,7 @@ public class SalesServiceImpl implements SalesService {
                 txn.setSessionId(order.getCashSessionId());
                 txn.setType("SALE");
                 txn.setAmount(appliedAmount);
-                txn.setPaymentMethod(line.getPaymentMethod());
+                txn.setPaymentMethod(paymentMethod);
                 txn.setPaymentId(savedPayment.getPaymentId());
                 txn.setOrderId(order.getOrderId());
                 txn.setInvoiceNo(order.getInvoiceNo());
@@ -388,55 +413,119 @@ public class SalesServiceImpl implements SalesService {
 
     @Override
     public SalesReturnResponse createReturn(SalesReturnRequest request) {
+        if (request == null) {
+            throw new RuntimeException("Return request is required");
+        }
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new RuntimeException("Return must contain at least one item");
+        }
+
         CustomerOrder order = findOrderById(request.getOrderId());
 
         if ("CANCELLED".equals(order.getStatus())) {
             throw new RuntimeException("Cannot return items from a cancelled order");
         }
+        if (request.getBranchId() != null && !request.getBranchId().equals(order.getBranchId())) {
+            throw new RuntimeException("Return branch does not match the original invoice branch");
+        }
+
+        Long customerId = request.getCustomerId() != null ? request.getCustomerId() : order.getCustomerId();
+        String settlementMethod = normalizeSettlementMethod(
+                request.getSettlementMethod() != null ? request.getSettlementMethod() : request.getRefundMethod(),
+                customerId
+        );
 
         BigDecimal totalRefund = BigDecimal.ZERO;
 
         SalesReturn salesReturn = new SalesReturn();
-        salesReturn.setBranchId(request.getBranchId());
+        salesReturn.setBranchId(order.getBranchId());
         salesReturn.setOrderId(request.getOrderId());
-        salesReturn.setCustomerId(request.getCustomerId());
+        salesReturn.setReturnNo(generateReturnNo(order.getBranchId()));
+        salesReturn.setCustomerId(customerId);
+        salesReturn.setCashSessionId(request.getCashSessionId() != null ? request.getCashSessionId() : order.getCashSessionId());
         salesReturn.setReturnDate(LocalDateTime.now());
-        salesReturn.setRefundMethod(request.getRefundMethod());
+        salesReturn.setRefundMethod(settlementMethod);
+        salesReturn.setSettlementMethod(settlementMethod);
+        salesReturn.setExchangeOrderId(request.getExchangeOrderId());
         salesReturn.setReason(request.getReason());
         salesReturn.setProcessedBy(request.getProcessedBy());
         salesReturn.setStatus("COMPLETED");
+        salesReturn.setCompletedAt(LocalDateTime.now());
 
         SalesReturn savedReturn = returnRepository.save(salesReturn);
 
         for (SalesReturnRequest.ReturnItemDto item : request.getItems()) {
-            BigDecimal lineRefund = item.getUnitPrice()
-                    .multiply(item.getQuantity())
-                    .setScale(2, RoundingMode.HALF_UP);
+            OrderProduct originalLine = resolveOriginalReturnLine(order, item);
+            BigDecimal requestedQty = positiveQuantity(item.getQuantity());
+            BigDecimal previouslyReturned = getPreviouslyReturnedQuantity(order.getOrderId(), originalLine);
+            BigDecimal returnableQty = nvl(originalLine.getQuantity()).subtract(previouslyReturned);
+
+            if (returnableQty.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Item is already fully returned: " + originalLine.getItemId());
+            }
+            if (requestedQty.compareTo(returnableQty) > 0) {
+                throw new RuntimeException("Return quantity exceeds returnable quantity for item "
+                        + originalLine.getItemId() + ". Returnable: " + returnableQty + ", requested: " + requestedQty);
+            }
+
+            BigDecimal unitRefund = calculateRefundUnitPrice(order, originalLine);
+            BigDecimal lineRefund = unitRefund.multiply(requestedQty).setScale(2, RoundingMode.HALF_UP);
             totalRefund = totalRefund.add(lineRefund);
 
             SalesReturnItem returnItem = new SalesReturnItem();
             returnItem.setReturnId(savedReturn.getReturnId());
-            returnItem.setItemId(item.getItemId());
-            item.setVariantId(resolveReturnLineVariantId(request.getBranchId(), item));
-            returnItem.setVariantId(item.getVariantId());
-            returnItem.setInternalBatchBarcode(item.getInternalBatchBarcode());
-            returnItem.setQuantity(item.getQuantity());
-            returnItem.setUnitPrice(item.getUnitPrice());
+            returnItem.setOrderProductId(originalLine.getOrderProductId());
+            returnItem.setItemId(originalLine.getItemId());
+            returnItem.setVariantId(originalLine.getVariantId());
+            returnItem.setUnitId(originalLine.getUnitId());
+            returnItem.setInternalBatchBarcode(originalLine.getBatchBarcode());
+            returnItem.setQuantity(requestedQty);
+            returnItem.setUnitPrice(unitRefund);
             returnItem.setLineRefund(lineRefund);
-            returnItem.setCondition(item.getCondition());
+            returnItem.setCondition(normalizeReturnCondition(item.getCondition()));
+            returnItem.setPreviouslyReturnedQuantity(previouslyReturned);
+            returnItem.setReturnableQuantity(returnableQty);
             returnItemRepository.save(returnItem);
 
             // add stock back
-            addReturnStock(request.getBranchId(), item, savedReturn.getReturnId(), request.getProcessedBy());
+            item.setItemId(originalLine.getItemId());
+            item.setVariantId(originalLine.getVariantId());
+            item.setUnitId(originalLine.getUnitId());
+            item.setInternalBatchBarcode(originalLine.getBatchBarcode());
+            item.setQuantity(requestedQty);
+            item.setUnitPrice(unitRefund);
+            item.setCondition(returnItem.getCondition());
+            addReturnStock(order.getBranchId(), item, savedReturn.getReturnId(), request.getProcessedBy());
         }
 
+        totalRefund = totalRefund.setScale(2, RoundingMode.HALF_UP);
         savedReturn.setRefundAmount(totalRefund);
+
+        CreditNote creditNote = createCreditNote(order, savedReturn, totalRefund, settlementMethod, request.getProcessedBy());
+        savedReturn.setCreditNoteNo(creditNote.getCreditNoteNo());
+
+        if ("CUSTOMER_CREDIT".equals(settlementMethod) || ("EXCHANGE".equals(settlementMethod) && customerId != null)) {
+            if (customerId == null) {
+                throw new RuntimeException("Customer is required for customer credit settlement");
+            }
+            customerService.recordReturnCredit(
+                    customerId,
+                    totalRefund,
+                    savedReturn.getReturnId(),
+                    savedReturn.getReturnNo(),
+                    request.getProcessedBy()
+            );
+        } else if ("RETURN_VOUCHER".equals(settlementMethod) || "EXCHANGE".equals(settlementMethod)) {
+            ReturnVoucher voucher = createReturnVoucher(order, savedReturn, creditNote, totalRefund, request.getProcessedBy());
+            savedReturn.setVoucherNo(voucher.getVoucherNo());
+        }
+
         returnRepository.save(savedReturn);
 
         // write cash session transaction for cash refund
-        if ("CASH".equals(request.getRefundMethod()) && order.getCashSessionId() != null) {
+        if ("CASH".equals(settlementMethod) && savedReturn.getCashSessionId() != null) {
             CashSessionTransaction txn = new CashSessionTransaction();
-            txn.setSessionId(order.getCashSessionId());
+            txn.setSessionId(savedReturn.getCashSessionId());
             txn.setType("REFUND");
             txn.setAmount(totalRefund);
             txn.setPaymentMethod("CASH");
@@ -448,6 +537,8 @@ public class SalesServiceImpl implements SalesService {
             txn.setCreatedAt(LocalDateTime.now());
             cashSessionTransactionRepository.save(txn);
         }
+
+        refreshOrderReturnStatus(order);
 
         return buildReturnResponse(savedReturn);
     }
@@ -469,7 +560,292 @@ public class SalesServiceImpl implements SalesService {
                 .stream().map(this::buildReturnResponse).toList();
     }
 
+    @Override
+    public ReturnVoucherResponse getReturnVoucher(String voucherNoOrCode) {
+        String code = normalizeVoucherCode(voucherNoOrCode);
+        ReturnVoucher voucher = returnVoucherRepository.findByVoucherNo(code)
+                .or(() -> returnVoucherRepository.findByRedemptionCode(code))
+                .orElseThrow(() -> new RuntimeException("Return voucher not found"));
+        return mapReturnVoucher(voucher, true);
+    }
+
     // ─── Stock deduction ─────────────────────────────────────────────────────────
+
+    private String normalizeSettlementMethod(String method, Long customerId) {
+        String normalized = method == null || method.isBlank()
+                ? "CASH"
+                : method.trim().toUpperCase();
+
+        if ("BALANCE_ADJUSTMENT".equals(normalized) || "STORE_CREDIT".equals(normalized)) {
+            normalized = customerId != null ? "CUSTOMER_CREDIT" : "RETURN_VOUCHER";
+        }
+        if ("CREDIT".equals(normalized) || "CUSTOMER_BALANCE".equals(normalized)) {
+            normalized = "CUSTOMER_CREDIT";
+        }
+        if ("VOUCHER".equals(normalized) || "CREDIT_VOUCHER".equals(normalized)) {
+            normalized = "RETURN_VOUCHER";
+        }
+
+        return switch (normalized) {
+            case "CASH", "CARD", "BANK", "CUSTOMER_CREDIT", "RETURN_VOUCHER", "EXCHANGE" -> normalized;
+            default -> throw new RuntimeException("Unsupported return settlement method: " + normalized);
+        };
+    }
+
+    private String normalizeReturnCondition(String condition) {
+        if (condition == null || condition.isBlank()) {
+            return "GOOD";
+        }
+        String normalized = condition.trim().toUpperCase();
+        return switch (normalized) {
+            case "GOOD", "SELLABLE" -> "GOOD";
+            case "DAMAGED", "DEFECTIVE" -> "DAMAGED";
+            case "EXPIRED" -> "EXPIRED";
+            default -> "OTHER";
+        };
+    }
+
+    private OrderProduct resolveOriginalReturnLine(CustomerOrder order, SalesReturnRequest.ReturnItemDto item) {
+        if (item.getOrderProductId() != null) {
+            OrderProduct line = orderProductRepository.findById(item.getOrderProductId())
+                    .orElseThrow(() -> new RuntimeException("Original sale line not found: " + item.getOrderProductId()));
+            if (!order.getOrderId().equals(line.getOrderId())) {
+                throw new RuntimeException("Return item does not belong to the original invoice");
+            }
+            return line;
+        }
+
+        List<OrderProduct> candidates = orderProductRepository.findByOrderIdAndItemId(order.getOrderId(), item.getItemId());
+        List<OrderProduct> matching = candidates.stream()
+                .filter(line -> Objects.equals(line.getVariantId(), item.getVariantId()))
+                .filter(line -> sameBlankable(line.getBatchBarcode(), item.getInternalBatchBarcode()))
+                .toList();
+
+        if (matching.size() == 1) {
+            return matching.get(0);
+        }
+        if (matching.isEmpty()) {
+            throw new RuntimeException("Returned item was not found on the original invoice: " + item.getItemId());
+        }
+        throw new RuntimeException("Return item is ambiguous. Send the original orderProductId for item: " + item.getItemId());
+    }
+
+    private boolean sameBlankable(String left, String right) {
+        String normalizedLeft = left == null || left.isBlank() ? null : left.trim();
+        String normalizedRight = right == null || right.isBlank() ? null : right.trim();
+        return Objects.equals(normalizedLeft, normalizedRight);
+    }
+
+    private BigDecimal positiveQuantity(BigDecimal quantity) {
+        BigDecimal normalized = nvl(quantity);
+        if (normalized.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Return quantity must be greater than zero");
+        }
+        return normalized;
+    }
+
+    private BigDecimal getPreviouslyReturnedQuantity(Long orderId, OrderProduct originalLine) {
+        BigDecimal returned = returnItemRepository.sumReturnedQuantity(
+                orderId,
+                originalLine.getOrderProductId(),
+                originalLine.getItemId(),
+                originalLine.getVariantId(),
+                originalLine.getBatchBarcode()
+        );
+        return nvl(returned);
+    }
+
+    private BigDecimal calculateRefundUnitPrice(CustomerOrder order, OrderProduct originalLine) {
+        BigDecimal soldQty = nvl(originalLine.getQuantity());
+        if (soldQty.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Original sold quantity is invalid for line: " + originalLine.getOrderProductId());
+        }
+
+        BigDecimal lineTotal = nvl(originalLine.getLineTotal()).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal orderSubtotal = nvl(order.getSubtotal());
+        BigDecimal orderDiscount = nvl(order.getDiscount());
+        BigDecimal allocatedOrderDiscount = BigDecimal.ZERO;
+
+        if (orderSubtotal.compareTo(BigDecimal.ZERO) > 0 && orderDiscount.compareTo(BigDecimal.ZERO) > 0) {
+            allocatedOrderDiscount = lineTotal
+                    .divide(orderSubtotal, 8, RoundingMode.HALF_UP)
+                    .multiply(orderDiscount)
+                    .setScale(2, RoundingMode.HALF_UP);
+        }
+
+        BigDecimal refundableLineTotal = lineTotal.subtract(allocatedOrderDiscount).max(BigDecimal.ZERO);
+        return refundableLineTotal.divide(soldQty, 6, RoundingMode.HALF_UP);
+    }
+
+    private CreditNote createCreditNote(
+            CustomerOrder order,
+            SalesReturn salesReturn,
+            BigDecimal amount,
+            String settlementMethod,
+            Long createdBy
+    ) {
+        CreditNote note = new CreditNote();
+        note.setCreditNoteNo(generateCreditNoteNo(order.getBranchId()));
+        note.setBranchId(order.getBranchId());
+        note.setOrderId(order.getOrderId());
+        note.setReturnId(salesReturn.getReturnId());
+        note.setCustomerId(salesReturn.getCustomerId());
+        note.setAmount(amount);
+        note.setSettlementMethod(settlementMethod);
+        if ("CUSTOMER_CREDIT".equals(settlementMethod) || "RETURN_VOUCHER".equals(settlementMethod) || "EXCHANGE".equals(settlementMethod)) {
+            note.setUsedAmount(BigDecimal.ZERO);
+            note.setRemainingAmount(amount);
+            note.setStatus("ACTIVE");
+        } else {
+            note.setUsedAmount(amount);
+            note.setRemainingAmount(BigDecimal.ZERO);
+            note.setStatus("SETTLED");
+        }
+        note.setCreatedBy(createdBy);
+        note.setCreatedAt(LocalDateTime.now());
+        note.setUpdatedAt(LocalDateTime.now());
+        return creditNoteRepository.save(note);
+    }
+
+    private ReturnVoucher createReturnVoucher(
+            CustomerOrder order,
+            SalesReturn salesReturn,
+            CreditNote creditNote,
+            BigDecimal amount,
+            Long issuedBy
+    ) {
+        ReturnVoucher voucher = new ReturnVoucher();
+        voucher.setBranchId(order.getBranchId());
+        voucher.setVoucherNo(generateVoucherNo(order.getBranchId()));
+        voucher.setRedemptionCode(generateVoucherToken());
+        voucher.setOriginalOrderId(order.getOrderId());
+        voucher.setSalesReturnId(salesReturn.getReturnId());
+        voucher.setOriginalInvoiceNo(order.getInvoiceNo());
+        voucher.setReturnNo(salesReturn.getReturnNo());
+        voucher.setCreditNoteNo(creditNote.getCreditNoteNo());
+        voucher.setOriginalAmount(amount);
+        voucher.setUsedAmount(BigDecimal.ZERO);
+        voucher.setRemainingAmount(amount);
+        voucher.setStatus("ACTIVE");
+        voucher.setIssueDate(LocalDate.now());
+        voucher.setIssuedBy(issuedBy);
+        voucher.setCreatedAt(LocalDateTime.now());
+        voucher.setUpdatedAt(LocalDateTime.now());
+        ReturnVoucher savedVoucher = returnVoucherRepository.save(voucher);
+
+        recordVoucherTransaction(
+                savedVoucher,
+                "ISSUE",
+                amount,
+                amount,
+                null,
+                salesReturn.getReturnId(),
+                salesReturn.getReturnNo(),
+                "Voucher issued for return " + salesReturn.getReturnNo(),
+                issuedBy
+        );
+        return savedVoucher;
+    }
+
+    private void refreshOrderReturnStatus(CustomerOrder order) {
+        List<OrderProduct> lines = orderProductRepository.findByOrderId(order.getOrderId());
+        BigDecimal soldQty = lines.stream()
+                .map(line -> nvl(line.getQuantity()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal returnedQty = lines.stream()
+                .map(line -> getPreviouslyReturnedQuantity(order.getOrderId(), line))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal returnedAmount = returnRepository.findByOrderId(order.getOrderId()).stream()
+                .filter(ret -> !"CANCELLED".equalsIgnoreCase(ret.getStatus()))
+                .filter(ret -> !"REJECTED".equalsIgnoreCase(ret.getStatus()))
+                .map(ret -> nvl(ret.getRefundAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (returnedQty.compareTo(BigDecimal.ZERO) <= 0) {
+            order.setReturnStatus("NONE");
+        } else if (soldQty.compareTo(BigDecimal.ZERO) > 0 && returnedQty.compareTo(soldQty) >= 0) {
+            order.setReturnStatus("FULLY_RETURNED");
+        } else {
+            order.setReturnStatus("PARTIALLY_RETURNED");
+        }
+        order.setReturnedAmount(returnedAmount.setScale(2, RoundingMode.HALF_UP));
+        order.setUpdatedAt(LocalDateTime.now());
+        orderRepository.save(order);
+    }
+
+    private void recordVoucherTransaction(
+            ReturnVoucher voucher,
+            String type,
+            BigDecimal amount,
+            BigDecimal balanceAfter,
+            Long orderId,
+            Long returnId,
+            String referenceNo,
+            String note,
+            Long createdBy
+    ) {
+        ReturnVoucherTransaction transaction = new ReturnVoucherTransaction();
+        transaction.setVoucherId(voucher.getVoucherId());
+        transaction.setVoucherNo(voucher.getVoucherNo());
+        transaction.setType(type);
+        transaction.setAmount(amount);
+        transaction.setBalanceAfter(balanceAfter);
+        transaction.setOrderId(orderId);
+        transaction.setSalesReturnId(returnId);
+        transaction.setReferenceNo(referenceNo);
+        transaction.setNote(note);
+        transaction.setCreatedBy(createdBy);
+        transaction.setCreatedAt(LocalDateTime.now());
+        returnVoucherTransactionRepository.save(transaction);
+    }
+
+    private ReturnVoucherResponse mapReturnVoucher(ReturnVoucher voucher, boolean includeTransactions) {
+        List<ReturnVoucherResponse.TransactionResponse> transactions = includeTransactions
+                ? returnVoucherTransactionRepository.findByVoucherIdOrderByCreatedAtDesc(voucher.getVoucherId())
+                        .stream()
+                        .map(txn -> ReturnVoucherResponse.TransactionResponse.builder()
+                                .transactionId(txn.getTransactionId())
+                                .type(txn.getType())
+                                .amount(txn.getAmount())
+                                .balanceAfter(txn.getBalanceAfter())
+                                .orderId(txn.getOrderId())
+                                .salesReturnId(txn.getSalesReturnId())
+                                .referenceNo(txn.getReferenceNo())
+                                .note(txn.getNote())
+                                .createdBy(txn.getCreatedBy())
+                                .createdAt(txn.getCreatedAt())
+                                .build())
+                        .toList()
+                : List.of();
+
+        return ReturnVoucherResponse.builder()
+                .voucherId(voucher.getVoucherId())
+                .branchId(voucher.getBranchId())
+                .voucherNo(voucher.getVoucherNo())
+                .redemptionCode(voucher.getRedemptionCode())
+                .originalOrderId(voucher.getOriginalOrderId())
+                .salesReturnId(voucher.getSalesReturnId())
+                .originalInvoiceNo(voucher.getOriginalInvoiceNo())
+                .returnNo(voucher.getReturnNo())
+                .creditNoteNo(voucher.getCreditNoteNo())
+                .originalAmount(voucher.getOriginalAmount())
+                .usedAmount(voucher.getUsedAmount())
+                .remainingAmount(voucher.getRemainingAmount())
+                .status(voucher.getStatus())
+                .issueDate(voucher.getIssueDate())
+                .expiryDate(voucher.getExpiryDate())
+                .issuedBy(voucher.getIssuedBy())
+                .createdAt(voucher.getCreatedAt())
+                .transactions(transactions)
+                .build();
+    }
+
+    private String normalizeVoucherCode(String code) {
+        if (code == null || code.isBlank()) {
+            throw new RuntimeException("Voucher number or redemption code is required");
+        }
+        return code.trim().toUpperCase();
+    }
 
     private void deductStock(Long branchId, OrderProductRequest item, Long orderId, Long userId) {
         // convert qty to base units
@@ -587,6 +963,11 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private void addReturnStock(Long branchId, SalesReturnRequest.ReturnItemDto item, Long returnId, Long userId) {
+        BigDecimal multiplier = itemUnitRepository
+                .findByItemIdAndUnitIdAndIsActiveTrue(item.getItemId(), item.getUnitId())
+                .map(ItemUnit::getMultiplierToBase)
+                .orElse(BigDecimal.ONE);
+        BigDecimal baseQty = item.getQuantity().multiply(multiplier);
         // only add back to stock if condition is GOOD
         if (!"GOOD".equalsIgnoreCase(item.getCondition())) {
             // damaged/expired — move to damaged stock
@@ -598,9 +979,9 @@ public class SalesServiceImpl implements SalesService {
                 stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
                         .ifPresent(batch -> {
                             if ("EXPIRED".equalsIgnoreCase(item.getCondition())) {
-                                batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(item.getQuantity()));
+                                batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(baseQty));
                             } else {
-                                batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(item.getQuantity()));
+                                batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(baseQty));
                             }
                             stockBatchRepository.save(batch);
                         });
@@ -613,8 +994,8 @@ public class SalesServiceImpl implements SalesService {
                 if (item.getInternalBatchBarcode() != null) {
                     stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
                             .ifPresent(batch -> {
-                                batch.setQtyRemaining(batch.getQtyRemaining().add(item.getQuantity()));
-                                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(item.getQuantity()));
+                                batch.setQtyRemaining(batch.getQtyRemaining().add(baseQty));
+                                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(baseQty));
                                 stockBatchRepository.save(batch);
                             });
                 }
@@ -626,9 +1007,9 @@ public class SalesServiceImpl implements SalesService {
         movement.setMovementType("SALE_RETURN");
         movement.setItemId(item.getItemId());
         movement.setVariantId(item.getVariantId());
-        movement.setUnitId(1L); // base unit for returns
+        movement.setUnitId(item.getUnitId());
         movement.setInternalBatchBarcode(item.getInternalBatchBarcode());
-        movement.setQuantity(item.getQuantity());
+        movement.setQuantity(baseQty);
         movement.setUnitPrice(item.getUnitPrice());
         movement.setRefTable("sales_returns");
         movement.setRefId(returnId);
@@ -879,6 +1260,7 @@ public class SalesServiceImpl implements SalesService {
         target.setAmount(source.getAmount());
         target.setTenderedAmount(source.getTenderedAmount());
         target.setReferenceNo(source.getReferenceNo());
+        target.setVoucherCode(source.getVoucherCode());
         target.setNote(source.getNote());
         return target;
     }
@@ -935,6 +1317,62 @@ public class SalesServiceImpl implements SalesService {
         return tenderedAmount.subtract(appliedAmount).max(BigDecimal.ZERO);
     }
 
+    private String normalizePaymentMethod(String paymentMethod) {
+        if (paymentMethod == null || paymentMethod.isBlank()) {
+            throw new RuntimeException("Payment method is required");
+        }
+        return paymentMethod.trim().toUpperCase();
+    }
+
+    private ReturnVoucher redeemReturnVoucherForSale(
+            String voucherNoOrCode,
+            BigDecimal amount,
+            CustomerOrder order,
+            Long createdBy
+    ) {
+        String code = normalizeVoucherCode(voucherNoOrCode);
+        ReturnVoucher voucher = returnVoucherRepository.findRedeemableByCodeForUpdate(code)
+                .orElseThrow(() -> new RuntimeException("Return voucher not found"));
+
+        if (!order.getBranchId().equals(voucher.getBranchId())) {
+            throw new RuntimeException("Voucher does not belong to this branch");
+        }
+        if (!"ACTIVE".equalsIgnoreCase(voucher.getStatus())
+                && !"PARTIALLY_USED".equalsIgnoreCase(voucher.getStatus())) {
+            throw new RuntimeException("Voucher is not active");
+        }
+        if (voucher.getExpiryDate() != null && voucher.getExpiryDate().isBefore(LocalDate.now())) {
+            voucher.setStatus("EXPIRED");
+            voucher.setUpdatedAt(LocalDateTime.now());
+            returnVoucherRepository.save(voucher);
+            throw new RuntimeException("Voucher has expired");
+        }
+        if (nvl(voucher.getRemainingAmount()).compareTo(amount) < 0) {
+            throw new RuntimeException("Voucher amount exceeds remaining voucher balance");
+        }
+
+        BigDecimal usedAmount = nvl(voucher.getUsedAmount()).add(amount).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal remainingAmount = nvl(voucher.getRemainingAmount()).subtract(amount).setScale(2, RoundingMode.HALF_UP);
+        voucher.setUsedAmount(usedAmount);
+        voucher.setRemainingAmount(remainingAmount);
+        voucher.setStatus(remainingAmount.compareTo(BigDecimal.ZERO) <= 0 ? "REDEEMED" : "PARTIALLY_USED");
+        voucher.setUpdatedAt(LocalDateTime.now());
+        ReturnVoucher savedVoucher = returnVoucherRepository.save(voucher);
+
+        recordVoucherTransaction(
+                savedVoucher,
+                "REDEEM",
+                amount,
+                remainingAmount,
+                order.getOrderId(),
+                null,
+                order.getInvoiceNo(),
+                "Voucher applied to sale " + order.getInvoiceNo(),
+                createdBy
+        );
+        return savedVoucher;
+    }
+
     private boolean isCashPayment(String paymentMethod) {
         return "CASH".equalsIgnoreCase(paymentMethod);
     }
@@ -964,6 +1402,44 @@ public class SalesServiceImpl implements SalesService {
             orderNo = prefix + datePart + "-" + uniquePart;
         }
         return orderNo;
+    }
+
+    private String generateReturnNo(Long branchId) {
+        String returnNo;
+        do {
+            returnNo = generateDocumentNo("RET", branchId);
+        } while (returnRepository.existsByReturnNo(returnNo));
+        return returnNo;
+    }
+
+    private String generateCreditNoteNo(Long branchId) {
+        String creditNoteNo;
+        do {
+            creditNoteNo = generateDocumentNo("CN", branchId);
+        } while (creditNoteRepository.existsByCreditNoteNo(creditNoteNo));
+        return creditNoteNo;
+    }
+
+    private String generateVoucherNo(Long branchId) {
+        String voucherNo;
+        do {
+            voucherNo = generateDocumentNo("RV", branchId);
+        } while (returnVoucherRepository.existsByVoucherNo(voucherNo));
+        return voucherNo;
+    }
+
+    private String generateVoucherToken() {
+        String token;
+        do {
+            token = "RVC-" + UUID.randomUUID().toString().replace("-", "").substring(0, 12).toUpperCase();
+        } while (returnVoucherRepository.existsByRedemptionCode(token));
+        return token;
+    }
+
+    private String generateDocumentNo(String prefix, Long branchId) {
+        String datePart = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        String uniquePart = UUID.randomUUID().toString().substring(0, 6).toUpperCase();
+        return prefix + "-" + branchId + "-" + datePart + "-" + uniquePart;
     }
 
     private String resolveOrderNo(CustomerOrder order) {
@@ -1014,6 +1490,7 @@ public class SalesServiceImpl implements SalesService {
                 .orderNo(resolveOrderNo(order))
                 .userId(order.getUserId())
                 .customerId(order.getCustomerId())
+                .customer(resolveCustomerResponse(order.getCustomerId()))
                 .cashSessionId(order.getCashSessionId())
                 .subtotal(order.getSubtotal())
                 .discount(order.getDiscount())
@@ -1022,11 +1499,43 @@ public class SalesServiceImpl implements SalesService {
                 .total(order.getTotal())
                 .paymentStatus(order.getPaymentStatus())
                 .status(order.getStatus())
+                .returnStatus(order.getReturnStatus())
+                .returnedAmount(order.getReturnedAmount())
                 .orderDate(order.getOrderDate())
                 .notes(order.getNotes())
                 .items(items)
                 .payments(payments)
                 .build();
+    }
+
+    private CustomerResponse resolveCustomerResponse(Long customerId) {
+        if (customerId == null) {
+            return null;
+        }
+
+        return customerRepository.findById(customerId)
+                .map(this::mapCustomerResponse)
+                .orElse(null);
+    }
+
+    private CustomerResponse mapCustomerResponse(Customer customer) {
+        CustomerResponse response = new CustomerResponse();
+        response.setCustomerId(customer.getCustomerId());
+        response.setBranchId(customer.getBranchId());
+        response.setAuthId(customer.getAuthId());
+        response.setName(customer.getName());
+        response.setNic(customer.getNic());
+        response.setPhone(customer.getPhone());
+        response.setEmail(customer.getEmail());
+        response.setAddress(customer.getAddress());
+        response.setShopBalance(customer.getShopBalance());
+        response.setLoyaltyCardNo(customer.getLoyaltyCardNo());
+        response.setLoyaltyPoints(customer.getLoyaltyPoints());
+        response.setCreditLimit(customer.getCreditLimit());
+        response.setIsActive(customer.getIsActive());
+        response.setCreatedAt(customer.getCreatedAt());
+        response.setUpdatedAt(customer.getUpdatedAt());
+        return response;
     }
 
     private CustomerOrderViewResponse buildCustomerOrderViewResponse(CustomerOrder order) {
@@ -1156,32 +1665,56 @@ public class SalesServiceImpl implements SalesService {
                 .stream().map(ri -> {
                     String itemName = itemRepository.findById(ri.getItemId())
                             .map(i -> i.getName()).orElse(null);
+                    OrderProduct originalLine = ri.getOrderProductId() != null
+                            ? orderProductRepository.findById(ri.getOrderProductId()).orElse(null)
+                            : null;
+                    ItemUnit unit = ri.getUnitId() != null ? itemUnitRepository.findById(ri.getUnitId()).orElse(null) : null;
                     return SalesReturnResponse.ReturnItemResponse.builder()
                             .returnItemId(ri.getReturnItemId())
+                            .orderProductId(ri.getOrderProductId())
                             .itemId(ri.getItemId())
                             .variantId(ri.getVariantId())
                             .variantSku(resolveVariantSku(ri.getVariantId()))
                             .variantLabel(resolveVariantLabel(ri.getVariantId()))
                             .itemName(itemName)
+                            .unitId(ri.getUnitId())
+                            .unitName(resolveUnitName(unit))
                             .internalBatchBarcode(ri.getInternalBatchBarcode())
                             .quantity(ri.getQuantity())
+                            .soldQuantity(originalLine != null ? originalLine.getQuantity() : null)
+                            .previouslyReturnedQuantity(ri.getPreviouslyReturnedQuantity())
+                            .returnableQuantity(ri.getReturnableQuantity())
                             .unitPrice(ri.getUnitPrice())
                             .lineRefund(ri.getLineRefund())
                             .condition(ri.getCondition())
                             .build();
                 }).toList();
 
+        ReturnVoucherResponse voucher = r.getVoucherNo() != null
+                ? returnVoucherRepository.findByVoucherNo(r.getVoucherNo())
+                        .map(v -> mapReturnVoucher(v, true))
+                        .orElse(null)
+                : null;
+
         return SalesReturnResponse.builder()
                 .returnId(r.getReturnId())
+                .returnNo(r.getReturnNo())
                 .orderId(r.getOrderId())
                 .invoiceNo(invoiceNo)
                 .branchId(r.getBranchId())
                 .customerId(r.getCustomerId())
+                .cashSessionId(r.getCashSessionId())
                 .returnDate(r.getReturnDate())
                 .refundMethod(r.getRefundMethod())
+                .settlementMethod(r.getSettlementMethod())
                 .refundAmount(r.getRefundAmount())
+                .creditNoteNo(r.getCreditNoteNo())
+                .voucherNo(r.getVoucherNo())
+                .voucher(voucher)
+                .exchangeOrderId(r.getExchangeOrderId())
                 .reason(r.getReason())
                 .processedBy(r.getProcessedBy())
+                .approvedBy(r.getApprovedBy())
                 .status(r.getStatus())
                 .items(items)
                 .build();

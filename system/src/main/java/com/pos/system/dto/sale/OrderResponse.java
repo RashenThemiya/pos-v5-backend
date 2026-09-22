@@ -1,5 +1,6 @@
 package com.pos.system.dto.sale;
 
+import com.pos.system.dto.customer.CustomerResponse;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -20,6 +21,7 @@ public class OrderResponse {
     private String orderNo;
     private Long userId;
     private Long customerId;
+    private CustomerResponse customer;
     private Long cashSessionId;
     private BigDecimal subtotal;
     private BigDecimal discount;
@@ -28,6 +30,8 @@ public class OrderResponse {
     private BigDecimal total;
     private String paymentStatus;
     private String status;
+    private String returnStatus;
+    private BigDecimal returnedAmount;
     private LocalDateTime orderDate;
     private String notes;
     private List<OrderProductResponse> items;

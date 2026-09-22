@@ -24,14 +24,27 @@ public class SalesReturn {
     @Column(nullable = false)
     private Long orderId;
 
+    @Column(unique = true, length = 60)
+    private String returnNo;
+
     private Long customerId;
+    private Long cashSessionId;
     private LocalDateTime returnDate;
     private String refundMethod;
+    private String settlementMethod;
     private BigDecimal refundAmount;
     private Long refundPaymentId;
+    private String creditNoteNo;
+    private String voucherNo;
+    private Long exchangeOrderId;
     private String reason;
 
     @Column(nullable = false)
     private Long processedBy;
+    private Long approvedBy;
     private String status;
+    private LocalDateTime completedAt;
+    private LocalDateTime cancelledAt;
+    private Long cancelledBy;
+    private String cancelReason;
 }
