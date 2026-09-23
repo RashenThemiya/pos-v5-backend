@@ -37,6 +37,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -531,6 +532,11 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         if (purchaseOrders == null || purchaseOrders.isEmpty()) {
             return List.of();
         }
+
+        purchaseOrders.stream()
+                .map(PurchaseOrder::getPoId)
+                .filter(Objects::nonNull)
+                .forEach(this::refreshPurchaseOrderReceivedQtyFromSupplies);
 
         List<Long> poIds = purchaseOrders.stream().map(PurchaseOrder::getPoId).toList();
         Map<Long, List<PurchaseOrderItem>> itemsByPoId = groupByPoId(purchaseOrderItemRepository.findByPoIdIn(poIds));
@@ -1784,11 +1790,10 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
     private boolean isSupplyCountedForReceiving(Supply supply) {
         String status = supply.getStatus();
-        return status != null
-                && "COMPLETED".equalsIgnoreCase(status)
-                && !"CANCELLED".equalsIgnoreCase(status)
-                && !"VOID".equalsIgnoreCase(status)
-                && !"VOIDED".equalsIgnoreCase(status);
+        return status == null
+                || (!"CANCELLED".equalsIgnoreCase(status)
+                    && !"VOID".equalsIgnoreCase(status)
+                    && !"VOIDED".equalsIgnoreCase(status));
     }
 
     private BigDecimal calculatePurchaseOrderPaidAmount(Long poId) {

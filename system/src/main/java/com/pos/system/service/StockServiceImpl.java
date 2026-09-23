@@ -8,9 +8,14 @@ import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ItemVariant;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.*;
+import com.pos.system.model.supplier.Supply;
+import com.pos.system.model.supplier.SupplyProduct;
 import com.pos.system.repository.*;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -44,12 +49,24 @@ public class StockServiceImpl implements StockService {
     private final UserRepository userRepository;
     private final UnitConversionService unitConversionService;
 
+    @Autowired
+    private SupplyProductRepository supplyProductRepository;
+
+    @Autowired
+    private SupplyRepository supplyRepository;
+
     @Override
     public List<StockResponseDto> getStockByBranch(Long branchId) {
         return stockRepository.findByBranchIdOrderByLastUpdatedDesc(branchId)
                 .stream()
                 .map(this::mapStock)
                 .toList();
+    }
+
+    @Override
+    public Page<StockResponseDto> getStockByBranch(Long branchId, Pageable pageable) {
+        return stockRepository.findByBranchId(branchId, pageable)
+                .map(this::mapStock);
     }
 
     @Override
@@ -172,6 +189,33 @@ public class StockServiceImpl implements StockService {
     }
 
     @Override
+    public Page<StockBatchResponseDto> getStockBatchesByBranch(Long branchId, Pageable pageable) {
+        return stockBatchRepository.findByBranchId(branchId, pageable)
+                .map(this::mapBatch);
+    }
+
+    @Override
+    public Page<StockBatchResponseDto> getStockBatchesByBranch(Long branchId, String query, Long itemId, Pageable pageable) {
+        String normalizedQuery = query == null ? "" : query.trim();
+        if (itemId != null && normalizedQuery.isEmpty()) {
+            return stockBatchRepository.findByBranchIdAndItemId(branchId, itemId, pageable)
+                    .map(this::mapBatch);
+        }
+
+        if (itemId != null) {
+            return stockBatchRepository.searchByBranchAndItemAndBatchText(branchId, itemId, normalizedQuery, pageable)
+                    .map(this::mapBatch);
+        }
+
+        if (normalizedQuery.isEmpty()) {
+            return getStockBatchesByBranch(branchId, pageable);
+        }
+
+        return stockBatchRepository.searchByBranchAndBatchText(branchId, normalizedQuery, pageable)
+                .map(this::mapBatch);
+    }
+
+    @Override
     public List<StockBatchResponseDto> getStockBatchesByBranchAndItem(Long branchId, Long itemId) {
         return stockBatchRepository.findByBranchIdAndItemIdOrderByCreatedAtDesc(branchId, itemId)
                 .stream()
@@ -185,6 +229,12 @@ public class StockServiceImpl implements StockService {
                 .stream()
                 .map(this::mapMovement)
                 .toList();
+    }
+
+    @Override
+    public Page<StockMovementResponseDto> getStockMovementsByBranch(Long branchId, Pageable pageable) {
+        return stockMovementRepository.findByBranchId(branchId, pageable)
+                .map(this::mapMovement);
     }
 
     @Override
@@ -503,6 +553,12 @@ public class StockServiceImpl implements StockService {
                 .toList();
     }
 
+    @Override
+    public Page<StockTransferResponseDto> getStockTransfersByBranch(Long branchId, Pageable pageable) {
+        return stockTransferRepository.findByFromBranchIdOrToBranchId(branchId, branchId, pageable)
+                .map(this::mapStockTransfer);
+    }
+
     private StockTransferResponseDto mapStockTransfer(StockTransfer transfer) {
         List<StockTransferItemResponseDto> items = stockTransferItemRepository.findByTransferId(transfer.getTransferId())
                 .stream()
@@ -618,6 +674,12 @@ public class StockServiceImpl implements StockService {
                 .stream()
                 .map(c -> getStockCountById(c.getStockCountId()))
                 .toList();
+    }
+
+    @Override
+    public Page<StockCountResponseDto> getStockCountsByBranch(Long branchId, Pageable pageable) {
+        return stockCountRepository.findByBranchId(branchId, pageable)
+                .map(c -> getStockCountById(c.getStockCountId()));
     }
 
     private void validateItemUnitAndVariant(Long branchId, Long itemId, Long unitId, Long variantId) {
@@ -818,6 +880,12 @@ public class StockServiceImpl implements StockService {
                 .filter(itemUnit -> itemUnit.getItemId().equals(batch.getItemId()))
                 .filter(itemUnit -> itemUnit.getBranchId().equals(batch.getBranchId()))
                 .orElse(null);
+        SupplyProduct supplyProduct = batch.getSupplyProductId() != null && supplyProductRepository != null
+                ? supplyProductRepository.findById(batch.getSupplyProductId()).orElse(null)
+                : null;
+        Supply supply = supplyProduct != null && supplyRepository != null
+                ? supplyRepository.findById(supplyProduct.getSupplyId()).orElse(null)
+                : null;
 
         BigDecimal qtyRemaining = toResponseUnitQty(batch.getQtyRemaining(), unit);
         BigDecimal availableQty = toResponseUnitQty(
@@ -837,6 +905,9 @@ public class StockServiceImpl implements StockService {
                 .itemSku(item != null ? item.getSku() : null)
                 .itemName(item != null ? item.getName() : null)
                 .supplyProductId(batch.getSupplyProductId())
+                .supplyId(supplyProduct != null ? supplyProduct.getSupplyId() : null)
+                .supplierId(supply != null ? supply.getSupplierId() : null)
+                .grnNo(supply != null ? supply.getGrnNo() : null)
                 .unitId(batch.getUnitId())
                 .masterUnitId(unit != null ? unit.getMasterUnitId() : null)
                 .unitName(resolveUnitName(unit))

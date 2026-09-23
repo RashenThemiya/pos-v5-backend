@@ -1,6 +1,7 @@
 package com.pos.system.service;
 
 import com.pos.system.dto.sale.*;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
@@ -16,6 +17,7 @@ public interface SalesService {
     OrderResponse getOrderById(Long orderId);
     OrderResponse getOrderByInvoiceNo(String invoiceNo);
     List<OrderResponse> getOrdersByBranch(Long branchId);
+    CustomerOrderPageResponse getOrdersByBranch(Long branchId, Pageable pageable);
     CustomerOrderPageResponse getCustomerOrdersByBranch(Long branchId, Long customerId, Pageable pageable);
     List<OrderResponse> getOrdersByItem(Long branchId, Long itemId);
     List<OrderResponse> getOrdersBySession(Long branchId, Long sessionId);
@@ -32,4 +34,5 @@ public interface SalesService {
     SalesReturnResponse getReturnById(Long returnId);
     List<SalesReturnResponse> getReturnsByOrder(Long orderId);
     List<SalesReturnResponse> getReturnsByBranch(Long branchId);
+    Page<SalesReturnResponse> getReturnsByBranch(Long branchId, Pageable pageable);
 }

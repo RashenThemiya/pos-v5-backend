@@ -478,6 +478,7 @@ class SupplierManagementServiceImplProcurementFlowTest {
         PurchaseOrderResponseDto secondReceipt = service.getPurchaseOrderById(po.getPoId());
         assertThat(secondReceipt.getReceivingStatus()).isEqualTo("PARTIALLY_RECEIVED");
         assertThat(secondReceipt.getItems().get(0).getReceivedQty()).isEqualByComparingTo("70");
+        assertThat(secondReceipt.getItems().get(0).getRemainingQty()).isEqualByComparingTo("30");
         assertThat(supplies).hasSize(1);
         assertThat(supplies.get(0).getSupplyId()).isEqualTo(grnId);
 

@@ -177,6 +177,20 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
+    public CustomerOrderPageResponse getOrdersByBranch(Long branchId, Pageable pageable) {
+        Page<CustomerOrder> orders = orderRepository.findByBranchId(branchId, pageable);
+
+        return CustomerOrderPageResponse.builder()
+                .content(orders.getContent().stream().map(this::buildCustomerOrderViewResponse).toList())
+                .page(orders.getNumber())
+                .pageSize(orders.getSize())
+                .totalElements(orders.getTotalElements())
+                .totalPages(orders.getTotalPages())
+                .sort(formatPageSort(pageable))
+                .build();
+    }
+
+    @Override
     public CustomerOrderPageResponse getCustomerOrdersByBranch(Long branchId, Long customerId, Pageable pageable) {
         Page<CustomerOrder> orders = orderRepository.findByBranchIdAndCustomerId(branchId, customerId, pageable);
 
@@ -467,6 +481,12 @@ public class SalesServiceImpl implements SalesService {
     public List<SalesReturnResponse> getReturnsByBranch(Long branchId) {
         return returnRepository.findByBranchIdOrderByReturnDateDesc(branchId)
                 .stream().map(this::buildReturnResponse).toList();
+    }
+
+    @Override
+    public Page<SalesReturnResponse> getReturnsByBranch(Long branchId, Pageable pageable) {
+        return returnRepository.findByBranchId(branchId, pageable)
+                .map(this::buildReturnResponse);
     }
 
     // ─── Stock deduction ─────────────────────────────────────────────────────────
