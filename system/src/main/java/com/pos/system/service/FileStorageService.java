@@ -39,6 +39,25 @@ public class FileStorageService {
         return uploadImage(file, "variant_images");
     }
 
+    public String uploadCatalogImage(byte[] content, String fileName, String contentType) {
+        if (content == null || content.length == 0) {
+            return null;
+        }
+        String normalizedType = contentType == null ? "" : contentType.toLowerCase();
+        if (!ALLOWED_IMAGE_TYPES.contains(normalizedType)) {
+            throw new RuntimeException("Only JPG, JPEG, PNG, and WEBP catalog images are allowed");
+        }
+
+        String key = "item_images/catalog/" + UUID.randomUUID() + "_" + sanitizeFileName(fileName);
+        PutObjectRequest request = PutObjectRequest.builder()
+                .bucket(bucket)
+                .key(key)
+                .contentType(normalizedType)
+                .build();
+        s3Client.putObject(request, RequestBody.fromBytes(content));
+        return publicUrl + "/" + key;
+    }
+
     private String uploadImage(MultipartFile file, String folder) {
         if (file == null || file.isEmpty()) {
             return null;
