@@ -3,6 +3,10 @@ package com.pos.system.controller;
 import com.pos.system.dto.stock.*;
 import com.pos.system.service.StockService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -21,6 +25,14 @@ public class StockController {
     @GetMapping("/branch/{branchId}")
     public ResponseEntity<List<StockResponseDto>> getStockByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(stockService.getStockByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW')")
+    @GetMapping("/branch/{branchId}/paged")
+    public ResponseEntity<Page<StockResponseDto>> getStockByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "lastUpdated", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(stockService.getStockByBranch(branchId, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW')")
@@ -44,6 +56,16 @@ public class StockController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_BATCH_VIEW')")
+    @GetMapping("/batches/branch/{branchId}/paged")
+    public ResponseEntity<Page<StockBatchResponseDto>> getStockBatchesByBranchPaged(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) Long itemId,
+            @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(stockService.getStockBatchesByBranch(branchId, q, itemId, pageable));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_BATCH_VIEW')")
     @GetMapping("/batches/branch/{branchId}/item/{itemId}")
     public ResponseEntity<List<StockBatchResponseDto>> getStockBatchesByBranchAndItem(@PathVariable Long branchId,
                                                                                        @PathVariable Long itemId) {
@@ -54,6 +76,14 @@ public class StockController {
     @GetMapping("/movements/branch/{branchId}")
     public ResponseEntity<List<StockMovementResponseDto>> getStockMovementsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(stockService.getStockMovementsByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_MOVEMENT_VIEW')")
+    @GetMapping("/movements/branch/{branchId}/paged")
+    public ResponseEntity<Page<StockMovementResponseDto>> getStockMovementsByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(stockService.getStockMovementsByBranch(branchId, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_MOVEMENT_VIEW')")
@@ -93,6 +123,14 @@ public class StockController {
         return ResponseEntity.ok(stockService.getStockTransfersByBranch(branchId));
     }
 
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_TRANSFER_VIEW')")
+    @GetMapping("/transfers/branch/{branchId}/paged")
+    public ResponseEntity<Page<StockTransferResponseDto>> getStockTransfersByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "transferDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(stockService.getStockTransfersByBranch(branchId, pageable));
+    }
+
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_COUNT_CREATE')")
     @PostMapping("/counts")
     public ResponseEntity<StockCountResponseDto> createStockCount(@RequestBody StockCountRequestDto dto) {
@@ -109,5 +147,13 @@ public class StockController {
     @GetMapping("/counts/branch/{branchId}")
     public ResponseEntity<List<StockCountResponseDto>> getStockCountsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(stockService.getStockCountsByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_COUNT_VIEW')")
+    @GetMapping("/counts/branch/{branchId}/paged")
+    public ResponseEntity<Page<StockCountResponseDto>> getStockCountsByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "countDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(stockService.getStockCountsByBranch(branchId, pageable));
     }
 }

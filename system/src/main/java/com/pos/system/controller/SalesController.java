@@ -3,6 +3,7 @@ package com.pos.system.controller;
 import com.pos.system.dto.sale.*;
 import com.pos.system.service.SalesService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
@@ -54,6 +55,14 @@ public class SalesController {
     @GetMapping("/orders/branch/{branchId}")
     public ResponseEntity<List<OrderResponse>> getOrdersByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(salesService.getOrdersByBranch(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @GetMapping("/orders/branch/{branchId}/paged")
+    public ResponseEntity<CustomerOrderPageResponse> getOrdersByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "orderDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(salesService.getOrdersByBranch(branchId, pageable));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
@@ -143,10 +152,18 @@ public class SalesController {
     public ResponseEntity<List<SalesReturnResponse>> getReturnsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(salesService.getReturnsByBranch(branchId));
     }
-
+  
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('SALE_CREATE')")
     @GetMapping("/return-vouchers/{voucherNoOrCode}")
     public ResponseEntity<ReturnVoucherResponse> getReturnVoucher(@PathVariable String voucherNoOrCode) {
         return ResponseEntity.ok(salesService.getReturnVoucher(voucherNoOrCode));
+    }
+  
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @GetMapping("/returns/branch/{branchId}/paged")
+    public ResponseEntity<Page<SalesReturnResponse>> getReturnsByBranchPaged(
+            @PathVariable Long branchId,
+            @PageableDefault(size = 25, sort = "returnDate", direction = Sort.Direction.DESC) Pageable pageable) {
+        return ResponseEntity.ok(salesService.getReturnsByBranch(branchId, pageable));
     }
 }
