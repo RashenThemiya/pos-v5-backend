@@ -10,5 +10,6 @@ import java.util.List;
 public interface SalesReturnRepository extends JpaRepository<SalesReturn, Long> {
     List<SalesReturn> findByOrderId(Long orderId);
     List<SalesReturn> findByBranchIdOrderByReturnDateDesc(Long branchId);
+    boolean existsByReturnNo(String returnNo);
     Page<SalesReturn> findByBranchId(Long branchId, Pageable pageable);
 }

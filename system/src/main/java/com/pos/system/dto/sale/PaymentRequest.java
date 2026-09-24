@@ -12,10 +12,11 @@ public class PaymentRequest {
 
     @Data
     public static class PaymentLineDto {
-        private String paymentMethod;   // CASH, CARD, CREDIT, CHEQUE
+        private String paymentMethod;   // CASH, CARD, CREDIT, CUSTOMER_BALANCE, RETURN_VOUCHER, CHEQUE
         private BigDecimal amount;
         private BigDecimal tenderedAmount; // actual cash given (for change calc)
         private String referenceNo;     // card ref, cheque no etc
+        private String voucherCode;
         private String note;
     }
 }

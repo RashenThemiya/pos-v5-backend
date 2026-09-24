@@ -189,6 +189,36 @@ public class CustomerService {
     }
 
     @Transactional
+    public void recordReturnCredit(Long customerId, BigDecimal amount, Long returnId, String returnNo, Long createdBy) {
+        applyBalanceChangeWithSignedLedger(
+                customerId,
+                amount,
+                "Return credit issued: " + returnNo,
+                "RETURN_CREDIT",
+                "sales_returns",
+                returnId,
+                createdBy,
+                true,
+                true
+        );
+    }
+
+    @Transactional
+    public void applyCustomerCreditPayment(Long customerId, BigDecimal amount, Long orderId, String invoiceNo, Long createdBy) {
+        applyBalanceChangeWithSignedLedger(
+                customerId,
+                amount,
+                "Customer return credit applied to sale: " + invoiceNo,
+                "CUSTOMER_CREDIT_REDEEMED",
+                "customer_orders",
+                orderId,
+                createdBy,
+                false,
+                false
+        );
+    }
+
+    @Transactional
     public CustomerPaymentResponse createCustomerPayment(Long customerId, CustomerPaymentRequest request) {
         if (request == null) {
             throw new RuntimeException("Payment request is required");
@@ -329,6 +359,56 @@ public class CustomerService {
         transaction.setAmount(balanceAmount);
         transaction.setPreviousBalance(outstandingDebt(previousShopBalance));
         transaction.setNewBalance(outstandingDebt(newShopBalance));
+        transaction.setNote(reason);
+        transaction.setRefTable(refTable);
+        transaction.setRefId(refId);
+        transaction.setCreatedAt(LocalDateTime.now());
+        transaction.setCreatedBy(createdBy != null ? createdBy : getCurrentUserId());
+        balanceTransactionRepository.save(transaction);
+    }
+
+    private void applyBalanceChangeWithSignedLedger(
+            Long customerId,
+            BigDecimal amount,
+            String reason,
+            String transactionType,
+            String refTable,
+            Long refId,
+            Long createdBy,
+            boolean addToShopBalance,
+            boolean allowDebtOffset
+    ) {
+        Customer customer = getById(customerId);
+        BigDecimal balanceAmount = positiveMoney(amount);
+        BigDecimal previousShopBalance = moneyOrZero(customer.getShopBalance());
+
+        if (!addToShopBalance) {
+            BigDecimal availableFunds = previousShopBalance.max(BigDecimal.ZERO);
+            if (availableFunds.compareTo(balanceAmount) < 0) {
+                throw new RuntimeException("Insufficient customer account credit. Available: "
+                        + availableFunds + ", requested: " + balanceAmount);
+            }
+        }
+
+        BigDecimal newShopBalance = addToShopBalance
+                ? previousShopBalance.add(balanceAmount)
+                : previousShopBalance.subtract(balanceAmount);
+
+        if (!allowDebtOffset && newShopBalance.compareTo(BigDecimal.ZERO) < 0) {
+            throw new RuntimeException("Customer account credit cannot go negative");
+        }
+
+        customer.setShopBalance(newShopBalance);
+        customer.setUpdatedAt(LocalDateTime.now());
+        customerRepository.save(customer);
+
+        CustomerBalanceTransaction transaction = new CustomerBalanceTransaction();
+        transaction.setCustomerId(customerId);
+        transaction.setBranchId(customer.getBranchId());
+        transaction.setType(transactionType);
+        transaction.setAmount(balanceAmount);
+        transaction.setPreviousBalance(previousShopBalance);
+        transaction.setNewBalance(newShopBalance);
         transaction.setNote(reason);
         transaction.setRefTable(refTable);
         transaction.setRefId(refId);

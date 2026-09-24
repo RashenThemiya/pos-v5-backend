@@ -57,6 +57,10 @@ class SalesServiceImplReturnTest {
     @Mock private PromotionRepository promotionRepository;
     @Mock private PromotionItemRepository promotionItemRepository;
     @Mock private PromotionBatchRepository promotionBatchRepository;
+    @Mock private CreditNoteRepository creditNoteRepository;
+    @Mock private ReturnVoucherRepository returnVoucherRepository;
+    @Mock private ReturnVoucherTransactionRepository returnVoucherTransactionRepository;
+    @Mock private CustomerRepository customerRepository;
     @Mock private CustomerService customerService;
 
     private SalesServiceImpl salesService;
@@ -84,6 +88,10 @@ class SalesServiceImplReturnTest {
                 promotionRepository,
                 promotionItemRepository,
                 promotionBatchRepository,
+                creditNoteRepository,
+                returnVoucherRepository,
+                returnVoucherTransactionRepository,
+                customerRepository,
                 customerService
         );
     }
@@ -107,10 +115,27 @@ class SalesServiceImplReturnTest {
         return item;
     }
 
+    private OrderProduct originalLine(long orderProductId, long itemId, String qty, String lineTotal) {
+        OrderProduct line = new OrderProduct();
+        line.setOrderProductId(orderProductId);
+        line.setOrderId(1L);
+        line.setItemId(itemId);
+        line.setUnitId(1L);
+        line.setQuantity(new BigDecimal(qty));
+        line.setUnitPrice(new BigDecimal(lineTotal).divide(new BigDecimal(qty)));
+        line.setLineTotal(new BigDecimal(lineTotal));
+        return line;
+    }
+
     @Test
     void createReturn_withCashRefund_writesCashSessionTransactionAgainstOrderSession() {
         CustomerOrder order = completedOrder();
+        order.setSubtotal(new BigDecimal("300.00"));
+        OrderProduct originalLine = originalLine(11L, 100L, "2", "300.00");
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(orderProductRepository.findByOrderIdAndItemId(1L, 100L)).thenReturn(List.of(originalLine));
+        when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of(originalLine));
+        when(returnItemRepository.sumReturnedQuantity(any(), any(), any(), any(), any())).thenReturn(BigDecimal.ZERO);
         when(returnRepository.save(any(SalesReturn.class))).thenAnswer(inv -> {
             SalesReturn r = inv.getArgument(0);
             if (r.getReturnId() == null) r.setReturnId(99L);
@@ -118,6 +143,7 @@ class SalesServiceImplReturnTest {
         });
         when(returnItemRepository.save(any(SalesReturnItem.class))).thenAnswer(inv -> inv.getArgument(0));
         when(returnItemRepository.findByReturnId(99L)).thenReturn(List.of());
+        when(creditNoteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         SalesReturnRequest request = new SalesReturnRequest();
         request.setOrderId(1L);
@@ -148,7 +174,12 @@ class SalesServiceImplReturnTest {
     @Test
     void createReturn_withCardRefund_doesNotTouchCashDrawer() {
         CustomerOrder order = completedOrder();
+        order.setSubtotal(new BigDecimal("50.00"));
+        OrderProduct originalLine = originalLine(12L, 100L, "1", "50.00");
         when(orderRepository.findById(1L)).thenReturn(Optional.of(order));
+        when(orderProductRepository.findByOrderIdAndItemId(1L, 100L)).thenReturn(List.of(originalLine));
+        when(orderProductRepository.findByOrderId(1L)).thenReturn(List.of(originalLine));
+        when(returnItemRepository.sumReturnedQuantity(any(), any(), any(), any(), any())).thenReturn(BigDecimal.ZERO);
         when(returnRepository.save(any(SalesReturn.class))).thenAnswer(inv -> {
             SalesReturn r = inv.getArgument(0);
             if (r.getReturnId() == null) r.setReturnId(101L);
@@ -156,6 +187,7 @@ class SalesServiceImplReturnTest {
         });
         when(returnItemRepository.save(any(SalesReturnItem.class))).thenAnswer(inv -> inv.getArgument(0));
         when(returnItemRepository.findByReturnId(101L)).thenReturn(List.of());
+        when(creditNoteRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         SalesReturnRequest request = new SalesReturnRequest();
         request.setOrderId(1L);

@@ -20,10 +20,13 @@ public class SalesReturnItem {
     @Column(nullable = false)
     private Long returnId;
 
+    private Long orderProductId;
+
     @Column(nullable = false)
     private Long itemId;
 
     private Long variantId;
+    private Long unitId;
 
     private String internalBatchBarcode;
     @Column(nullable = false)
@@ -34,4 +37,6 @@ public class SalesReturnItem {
     private BigDecimal unitPrice;
     @Column(nullable = false)
     private BigDecimal lineRefund;
+    private BigDecimal previouslyReturnedQuantity = BigDecimal.ZERO;
+    private BigDecimal returnableQuantity = BigDecimal.ZERO;
 }

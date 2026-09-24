@@ -38,6 +38,8 @@ public class CustomerOrder {
     private BigDecimal total;
     private String paymentStatus = "UNPAID";
     private String status;
+    private String returnStatus = "NONE";
+    private BigDecimal returnedAmount = BigDecimal.ZERO;
     private LocalDateTime orderDate;
     private String notes;
     private LocalDateTime cancelledAt;
