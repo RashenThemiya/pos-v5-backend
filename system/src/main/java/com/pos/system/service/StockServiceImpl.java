@@ -6,6 +6,7 @@ import com.pos.system.model.catalog.Category;
 import com.pos.system.model.catalog.Item;
 import com.pos.system.model.catalog.ItemUnit;
 import com.pos.system.model.catalog.ItemVariant;
+import com.pos.system.model.catalog.ItemVariantAttribute;
 import com.pos.system.model.catalog.UnitMaster;
 import com.pos.system.model.stock.*;
 import com.pos.system.model.supplier.Supply;
@@ -407,44 +408,65 @@ public class StockServiceImpl implements StockService {
         for (StockTransferItemRequestDto itemDto : dto.getItems()) {
             StockBatch sourceBatch = findSourceTransferBatch(dto.getFromBranchId(), itemDto);
 
-            BigDecimal qty = nvlQty(itemDto.getQuantity());
-            if (qty.compareTo(BigDecimal.ZERO) <= 0) {
+            BigDecimal requestedQty = nvlQty(itemDto.getQuantity());
+            if (requestedQty.compareTo(BigDecimal.ZERO) <= 0) {
                 throw new RuntimeException("Transfer quantity must be greater than zero");
             }
 
-            Long variantId = sourceBatch.getVariantId() != null ? sourceBatch.getVariantId() : itemDto.getVariantId();
-            validateItemUnitAndVariant(dto.getFromBranchId(), itemDto.getItemId(), sourceBatch.getUnitId(), variantId);
+            Long sourceItemId = sourceBatch.getItemId();
+            Long sourceVariantId = sourceBatch.getVariantId() != null ? sourceBatch.getVariantId() : itemDto.getVariantId();
+            Long transferUnitId = itemDto.getUnitId() != null ? itemDto.getUnitId() : sourceBatch.getUnitId();
 
-            if (!sourceBatch.getItemId().equals(itemDto.getItemId())) {
+            validateItemUnitAndVariant(dto.getFromBranchId(), sourceItemId, transferUnitId, sourceVariantId);
+
+            if (itemDto.getItemId() != null && !sourceBatch.getItemId().equals(itemDto.getItemId())) {
                 throw new RuntimeException("Batch does not belong to item: " + itemDto.getItemId());
             }
-            if (!sameVariant(sourceBatch.getVariantId(), variantId)) {
+            if (!sameVariant(sourceBatch.getVariantId(), sourceVariantId)) {
                 throw new RuntimeException("Batch does not belong to selected variant");
             }
 
-            if (nvlQty(sourceBatch.getAvailableQty()).compareTo(qty) < 0) {
+            BigDecimal qtyBase = itemDto.getUnitId() != null
+                    ? unitConversionService.toBaseQty(sourceItemId, transferUnitId, requestedQty)
+                    : requestedQty;
+            if (qtyBase.compareTo(BigDecimal.ZERO) <= 0) {
+                throw new RuntimeException("Transfer quantity must be greater than zero");
+            }
+
+            if (nvlQty(sourceBatch.getAvailableQty()).compareTo(qtyBase) < 0) {
                 throw new RuntimeException("Insufficient batch qty for batch: " + sourceBatch.getInternalBatchBarcode());
             }
 
-            sourceBatch.setQtyRemaining(nvlQty(sourceBatch.getQtyRemaining()).subtract(qty));
-            sourceBatch.setAvailableQty(nvlQty(sourceBatch.getAvailableQty()).subtract(qty));
+            Item sourceItem = findActiveItemInBranch(dto.getFromBranchId(), sourceItemId);
+            Item destinationItem = ensureDestinationItem(sourceItem, dto.getToBranchId());
+            ItemVariant sourceVariant = findSourceVariant(sourceItemId, sourceVariantId);
+            ItemVariant destinationVariant = sourceVariant != null
+                    ? ensureDestinationVariant(sourceVariant, destinationItem)
+                    : null;
+            ItemUnit sourceUnit = resolveTransferSourceUnit(dto.getFromBranchId(), sourceItemId, transferUnitId);
+            ItemUnit destinationUnit = ensureDestinationUnit(sourceUnit, destinationItem);
+            BigDecimal destinationUnitQty = toResponseUnitQty(qtyBase, destinationUnit);
+
+            sourceBatch.setQtyRemaining(nvlQty(sourceBatch.getQtyRemaining()).subtract(qtyBase));
+            sourceBatch.setAvailableQty(nvlQty(sourceBatch.getAvailableQty()).subtract(qtyBase));
             stockBatchRepository.save(sourceBatch);
 
-            Stock fromStock = findStock(dto.getFromBranchId(), itemDto.getItemId(), variantId)
+            Stock fromStock = findStock(dto.getFromBranchId(), sourceItemId, sourceVariantId)
                     .orElseThrow(() -> new RuntimeException("Source stock not found"));
             fromStock.setLastUpdated(LocalDateTime.now());
             stockRepository.save(fromStock);
 
-            ItemUnit baseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(itemDto.getItemId())
-                    .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + itemDto.getItemId()));
+            ItemUnit destinationBaseUnit = itemUnitRepository.findByItemIdAndIsBaseUnitTrue(destinationItem.getItemId())
+                    .orElseThrow(() -> new RuntimeException("Base unit not found for item: " + destinationItem.getItemId()));
+            Long destinationVariantId = destinationVariant != null ? destinationVariant.getVariantId() : null;
 
-            Stock toStock = findStock(dto.getToBranchId(), itemDto.getItemId(), variantId)
+            Stock toStock = findStock(dto.getToBranchId(), destinationItem.getItemId(), destinationVariantId)
                     .orElseGet(() -> {
                         Stock s = new Stock();
                         s.setBranchId(dto.getToBranchId());
-                        s.setItemId(itemDto.getItemId());
-                        s.setVariantId(variantId);
-                        s.setUnitId(baseUnit.getUnitId());
+                        s.setItemId(destinationItem.getItemId());
+                        s.setVariantId(destinationVariantId);
+                        s.setUnitId(destinationBaseUnit.getUnitId());
                         return s;
                     });
             toStock.setLastUpdated(LocalDateTime.now());
@@ -452,17 +474,17 @@ public class StockServiceImpl implements StockService {
 
             StockBatch destBatch = new StockBatch();
             destBatch.setBranchId(dto.getToBranchId());
-            destBatch.setItemId(sourceBatch.getItemId());
-            destBatch.setVariantId(variantId);
-            destBatch.setSupplyProductId(sourceBatch.getSupplyProductId());
-            destBatch.setUnitId(sourceBatch.getUnitId());
-            destBatch.setReceivedQty(qty);
-            destBatch.setReceivedBaseQty(qty);
-            destBatch.setQtyRemaining(qty);
-            destBatch.setAvailableQty(qty);
+            destBatch.setItemId(destinationItem.getItemId());
+            destBatch.setVariantId(destinationVariantId);
+            destBatch.setSupplyProductId(0L);
+            destBatch.setUnitId(destinationUnit.getUnitId());
+            destBatch.setReceivedQty(destinationUnitQty);
+            destBatch.setReceivedBaseQty(qtyBase);
+            destBatch.setQtyRemaining(qtyBase);
+            destBatch.setAvailableQty(qtyBase);
             destBatch.setDamagedQty(BigDecimal.ZERO);
             destBatch.setExpiredQty(BigDecimal.ZERO);
-            destBatch.setInternalBatchBarcode(generateInternalBatchBarcode(dto.getToBranchId(), sourceBatch.getItemId()));
+            destBatch.setInternalBatchBarcode(generateInternalBatchBarcode(dto.getToBranchId(), destinationItem.getItemId()));
             destBatch.setBatchNo(sourceBatch.getBatchNo());
             destBatch.setSupplierBatchBarcode(sourceBatch.getSupplierBatchBarcode());
             destBatch.setExpiryDate(sourceBatch.getExpiryDate());
@@ -473,20 +495,21 @@ public class StockServiceImpl implements StockService {
 
             StockTransferItem transferItem = new StockTransferItem();
             transferItem.setTransferId(savedTransfer.getTransferId());
-            transferItem.setItemId(itemDto.getItemId());
-            transferItem.setVariantId(variantId);
+            transferItem.setItemId(sourceItemId);
+            transferItem.setVariantId(sourceVariantId);
+            transferItem.setUnitId(sourceUnit.getUnitId());
             transferItem.setInternalBatchBarcode(sourceBatch.getInternalBatchBarcode());
-            transferItem.setQuantity(qty);
+            transferItem.setQuantity(qtyBase);
             stockTransferItemRepository.save(transferItem);
 
             StockMovement outMovement = new StockMovement();
             outMovement.setBranchId(dto.getFromBranchId());
             outMovement.setMovementType("TRANSFER_OUT");
-            outMovement.setItemId(itemDto.getItemId());
-            outMovement.setVariantId(variantId);
-            outMovement.setUnitId(sourceBatch.getUnitId());
+            outMovement.setItemId(sourceItemId);
+            outMovement.setVariantId(sourceVariantId);
+            outMovement.setUnitId(sourceUnit.getUnitId());
             outMovement.setInternalBatchBarcode(sourceBatch.getInternalBatchBarcode());
-            outMovement.setQuantity(qty);
+            outMovement.setQuantity(qtyBase);
             outMovement.setUnitCost(sourceBatch.getCostPrice());
             outMovement.setUnitPrice(sourceBatch.getSellingPrice());
             outMovement.setRefTable("stock_transfers");
@@ -499,11 +522,11 @@ public class StockServiceImpl implements StockService {
             StockMovement inMovement = new StockMovement();
             inMovement.setBranchId(dto.getToBranchId());
             inMovement.setMovementType("TRANSFER_IN");
-            inMovement.setItemId(itemDto.getItemId());
-            inMovement.setVariantId(variantId);
-            inMovement.setUnitId(sourceBatch.getUnitId());
+            inMovement.setItemId(destinationItem.getItemId());
+            inMovement.setVariantId(destinationVariantId);
+            inMovement.setUnitId(destinationUnit.getUnitId());
             inMovement.setInternalBatchBarcode(destBatch.getInternalBatchBarcode());
-            inMovement.setQuantity(qty);
+            inMovement.setQuantity(qtyBase);
             inMovement.setUnitCost(sourceBatch.getCostPrice());
             inMovement.setUnitPrice(sourceBatch.getSellingPrice());
             inMovement.setRefTable("stock_transfers");
@@ -537,6 +560,314 @@ public class StockServiceImpl implements StockService {
         return sourceBatch;
     }
 
+    private Item findActiveItemInBranch(Long branchId, Long itemId) {
+        return itemRepository.findByItemIdAndBranchId(itemId, branchId)
+                .filter(item -> Boolean.TRUE.equals(item.getIsActive()))
+                .orElseThrow(() -> new RuntimeException("Active item not found in branch: " + itemId));
+    }
+
+    private Item ensureDestinationItem(Item sourceItem, Long toBranchId) {
+        java.util.Optional<Item> existing = itemRepository.findByBranchIdAndSku(toBranchId, sourceItem.getSku());
+        if (existing.isPresent()) {
+            Item item = existing.get();
+            if (!Boolean.TRUE.equals(item.getIsActive())) {
+                item.setIsActive(true);
+                item.setUpdatedAt(LocalDateTime.now());
+                item = itemRepository.save(item);
+            }
+            return item;
+        }
+
+        Item destination = new Item();
+        destination.setBranchId(toBranchId);
+        destination.setSku(sourceItem.getSku());
+        destination.setName(sourceItem.getName());
+        destination.setImage(sourceItem.getImage());
+        destination.setCategoryId(resolveMatchingCategoryId(sourceItem.getCategoryId(), toBranchId));
+        destination.setBrandId(resolveMatchingBrandId(sourceItem.getBrandId(), toBranchId));
+        destination.setIsWeighed(sourceItem.getIsWeighed());
+        destination.setMinStock(sourceItem.getMinStock());
+        destination.setMaxStock(sourceItem.getMaxStock());
+        destination.setScaleBarcodePrefix(sourceItem.getScaleBarcodePrefix());
+        destination.setIsActive(true);
+        destination.setCreatedAt(LocalDateTime.now());
+        destination.setUpdatedAt(LocalDateTime.now());
+
+        Item savedDestination = itemRepository.save(destination);
+        copyDestinationUnits(sourceItem, savedDestination);
+        copyDestinationVariants(sourceItem, savedDestination);
+        return savedDestination;
+    }
+
+    private ItemVariant findSourceVariant(Long itemId, Long variantId) {
+        if (variantId == null) {
+            return null;
+        }
+
+        return itemVariantRepository.findByVariantIdAndItemId(variantId, itemId)
+                .filter(variant -> Boolean.TRUE.equals(variant.getIsActive()))
+                .orElseThrow(() -> new RuntimeException("Active source variant not found: " + variantId));
+    }
+
+    private ItemVariant ensureDestinationVariant(ItemVariant sourceVariant, Item destinationItem) {
+        java.util.Optional<ItemVariant> existing = findDestinationVariant(sourceVariant, destinationItem);
+        if (existing.isPresent()) {
+            ItemVariant variant = existing.get();
+            if (!Boolean.TRUE.equals(variant.getIsActive())) {
+                variant.setIsActive(true);
+                variant.setUpdatedAt(LocalDateTime.now());
+                variant = itemVariantRepository.save(variant);
+            }
+            return variant;
+        }
+
+        return copyDestinationVariant(sourceVariant, destinationItem);
+    }
+
+    private java.util.Optional<ItemVariant> findDestinationVariant(ItemVariant sourceVariant, Item destinationItem) {
+        if (sourceVariant == null || destinationItem == null) {
+            return java.util.Optional.empty();
+        }
+
+        List<ItemVariant> destinationVariants = itemVariantRepository
+                .findByItemIdOrderByVariantIdAsc(destinationItem.getItemId())
+                .stream()
+                .filter(variant -> Boolean.TRUE.equals(variant.getIsActive()))
+                .toList();
+
+        java.util.Optional<ItemVariant> byCombination = destinationVariants.stream()
+                .filter(variant -> sameText(variant.getCombinationSignature(), sourceVariant.getCombinationSignature()))
+                .findFirst();
+        if (byCombination.isPresent()) {
+            return byCombination;
+        }
+
+        java.util.Optional<ItemVariant> bySku = destinationVariants.stream()
+                .filter(variant -> sameText(variant.getSku(), sourceVariant.getSku()))
+                .findFirst();
+        if (bySku.isPresent()) {
+            return bySku;
+        }
+
+        return destinationVariants.stream()
+                .filter(variant -> sameText(variant.getVariantSku(), sourceVariant.getVariantSku()))
+                .findFirst();
+    }
+
+    private ItemUnit resolveTransferSourceUnit(Long branchId, Long itemId, Long unitId) {
+        if (unitId == null) {
+            throw new RuntimeException("Transfer unit is required");
+        }
+
+        return itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
+                .filter(unit -> branchId.equals(unit.getBranchId()))
+                .orElseThrow(() -> new RuntimeException("Active transfer unit not found: " + unitId));
+    }
+
+    private ItemUnit ensureDestinationUnit(ItemUnit sourceUnit, Item destinationItem) {
+        List<ItemUnit> destinationUnits = itemUnitRepository.findByItemIdAndIsActiveTrue(destinationItem.getItemId())
+                .stream()
+                .filter(unit -> destinationItem.getBranchId().equals(unit.getBranchId()))
+                .toList();
+
+        if (sourceUnit.getBarcode() != null && !sourceUnit.getBarcode().isBlank()) {
+            java.util.Optional<ItemUnit> byBarcode = itemUnitRepository
+                    .findByBranchIdAndBarcodeAndIsActiveTrue(destinationItem.getBranchId(), sourceUnit.getBarcode())
+                    .filter(unit -> destinationItem.getItemId().equals(unit.getItemId()))
+                    .filter(unit -> sameMultiplier(unit, sourceUnit));
+            if (byBarcode.isPresent()) {
+                return byBarcode.get();
+            }
+        }
+
+        String sourceUnitName = resolveUnitName(sourceUnit);
+        java.util.Optional<ItemUnit> byNameAndMultiplier = destinationUnits.stream()
+                .filter(unit -> sameMultiplier(unit, sourceUnit))
+                .filter(unit -> sameText(resolveUnitName(unit), sourceUnitName)
+                        || sameText(unit.getUnitName(), sourceUnit.getUnitName()))
+                .findFirst();
+        if (byNameAndMultiplier.isPresent()) {
+            return byNameAndMultiplier.get();
+        }
+
+        java.util.Optional<ItemUnit> inactiveMatch = itemUnitRepository.findByItemId(destinationItem.getItemId())
+                .stream()
+                .filter(unit -> destinationItem.getBranchId().equals(unit.getBranchId()))
+                .filter(unit -> sameMultiplier(unit, sourceUnit))
+                .filter(unit -> sameText(resolveUnitName(unit), sourceUnitName)
+                        || sameText(unit.getUnitName(), sourceUnit.getUnitName()))
+                .findFirst();
+        if (inactiveMatch.isPresent()) {
+            ItemUnit unit = inactiveMatch.get();
+            unit.setIsActive(true);
+            unit.setUpdatedAt(LocalDateTime.now());
+            return itemUnitRepository.save(unit);
+        }
+
+        return copyDestinationUnit(sourceUnit, destinationItem);
+    }
+
+    private void copyDestinationUnits(Item sourceItem, Item destinationItem) {
+        itemUnitRepository.findByItemId(sourceItem.getItemId())
+                .forEach(sourceUnit -> copyDestinationUnit(sourceUnit, destinationItem));
+    }
+
+    private ItemUnit copyDestinationUnit(ItemUnit sourceUnit, Item destinationItem) {
+        ItemUnit unit = new ItemUnit();
+        unit.setBranchId(destinationItem.getBranchId());
+        unit.setItemId(destinationItem.getItemId());
+        unit.setMasterUnitId(null);
+        unit.setUnitName(sourceUnit.getUnitName());
+        unit.setMultiplierToBase(sourceUnit.getMultiplierToBase());
+        unit.setBarcode(resolveCopyBarcode(sourceUnit.getBarcode(), destinationItem.getBranchId()));
+        unit.setDefaultSellingPrice(sourceUnit.getDefaultSellingPrice());
+        unit.setIsBaseUnit(sourceUnit.getIsBaseUnit());
+        unit.setIsActive(true);
+        unit.setCreatedAt(LocalDateTime.now());
+        unit.setUpdatedAt(LocalDateTime.now());
+        return itemUnitRepository.save(unit);
+    }
+
+    private void copyDestinationVariants(Item sourceItem, Item destinationItem) {
+        itemVariantRepository.findByItemIdOrderByVariantIdAsc(sourceItem.getItemId())
+                .forEach(sourceVariant -> copyDestinationVariant(sourceVariant, destinationItem));
+    }
+
+    private ItemVariant copyDestinationVariant(ItemVariant sourceVariant, Item destinationItem) {
+        ItemVariant variant = new ItemVariant();
+        variant.setItemId(destinationItem.getItemId());
+        variant.setBranchId(destinationItem.getBranchId());
+        variant.setSku(resolveCopyVariantSku(sourceVariant.getSku(), destinationItem.getBranchId()));
+        variant.setVariantSku(generateCopiedVariantSku(destinationItem, sourceVariant));
+        variant.setDefaultSellingPrice(sourceVariant.getDefaultSellingPrice());
+        variant.setImage(sourceVariant.getImage());
+        variant.setCombinationSignature(sourceVariant.getCombinationSignature());
+        variant.setIsActive(true);
+        variant.setCreatedAt(LocalDateTime.now());
+        variant.setUpdatedAt(LocalDateTime.now());
+
+        ItemVariant savedVariant = itemVariantRepository.save(variant);
+        List<ItemVariantAttribute> copiedAttributes = itemVariantAttributeRepository
+                .findByVariantIdOrderByAttributeNameAsc(sourceVariant.getVariantId())
+                .stream()
+                .map(attribute -> {
+                    ItemVariantAttribute copy = new ItemVariantAttribute();
+                    copy.setVariantId(savedVariant.getVariantId());
+                    copy.setAttributeName(attribute.getAttributeName());
+                    copy.setAttributeValue(attribute.getAttributeValue());
+                    return copy;
+                })
+                .toList();
+        itemVariantAttributeRepository.saveAll(copiedAttributes);
+        return savedVariant;
+    }
+
+    private Long resolveMatchingCategoryId(Long sourceCategoryId, Long destinationBranchId) {
+        if (sourceCategoryId == null) {
+            return null;
+        }
+        return categoryRepository.findById(sourceCategoryId)
+                .flatMap(sourceCategory -> categoryRepository.findByBranchId(destinationBranchId)
+                        .stream()
+                        .filter(destinationCategory -> sameText(destinationCategory.getName(), sourceCategory.getName()))
+                        .filter(destinationCategory -> Boolean.TRUE.equals(destinationCategory.getIsActive()))
+                        .findFirst())
+                .map(Category::getCategoryId)
+                .orElse(null);
+    }
+
+    private Long resolveMatchingBrandId(Long sourceBrandId, Long destinationBranchId) {
+        if (sourceBrandId == null) {
+            return null;
+        }
+        return brandRepository.findById(sourceBrandId)
+                .flatMap(sourceBrand -> brandRepository.findByBranchId(destinationBranchId)
+                        .stream()
+                        .filter(destinationBrand -> sameText(destinationBrand.getName(), sourceBrand.getName()))
+                        .filter(destinationBrand -> Boolean.TRUE.equals(destinationBrand.getIsActive()))
+                        .findFirst())
+                .map(Brand::getBrandId)
+                .orElse(null);
+    }
+
+    private String resolveCopyBarcode(String barcode, Long destinationBranchId) {
+        if (barcode == null || barcode.isBlank()) {
+            return null;
+        }
+        return itemUnitRepository.existsByBranchIdAndBarcode(destinationBranchId, barcode) ? null : barcode;
+    }
+
+    private String resolveCopyVariantSku(String sku, Long destinationBranchId) {
+        if (sku == null || sku.isBlank()) {
+            return null;
+        }
+        boolean duplicate = itemRepository.existsByBranchIdAndSku(destinationBranchId, sku)
+                || itemVariantRepository.existsByBranchIdAndSku(destinationBranchId, sku)
+                || itemVariantRepository.existsByBranchIdAndVariantSku(destinationBranchId, sku);
+        return duplicate ? null : sku;
+    }
+
+    private String generateCopiedVariantSku(Item destinationItem, ItemVariant sourceVariant) {
+        for (int attempt = 0; attempt < 10; attempt++) {
+            String seed = destinationItem.getBranchId() + ":" + destinationItem.getItemId() + ":"
+                    + sourceVariant.getCombinationSignature() + ":" + attempt;
+            String sku = "V" + destinationItem.getItemId() + "-"
+                    + UUID.nameUUIDFromBytes(seed.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                    .toString()
+                    .substring(0, 8)
+                    .toUpperCase();
+            if (!itemVariantRepository.existsByBranchIdAndVariantSku(destinationItem.getBranchId(), sku)
+                    && !itemVariantRepository.existsByBranchIdAndSku(destinationItem.getBranchId(), sku)
+                    && !itemRepository.existsByBranchIdAndSku(destinationItem.getBranchId(), sku)) {
+                return sku;
+            }
+        }
+        return "V" + destinationItem.getItemId() + "-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+    }
+
+    private Item findItemInBranchOrNull(Long branchId, Long itemId) {
+        if (branchId == null || itemId == null) {
+            return null;
+        }
+        return itemRepository.findByItemIdAndBranchId(itemId, branchId).orElse(null);
+    }
+
+    private Item resolveDestinationItemOrNull(Item sourceItem, Long toBranchId) {
+        if (sourceItem == null || toBranchId == null) {
+            return null;
+        }
+        return itemRepository.findByBranchIdAndSku(toBranchId, sourceItem.getSku()).orElse(null);
+    }
+
+    private ItemVariant findVariantOrNull(Long itemId, Long variantId) {
+        if (itemId == null || variantId == null) {
+            return null;
+        }
+        return itemVariantRepository.findByVariantIdAndItemId(variantId, itemId).orElse(null);
+    }
+
+    private ItemUnit findTransferUnitOrNull(Long itemId, Long unitId) {
+        if (itemId == null || unitId == null) {
+            return null;
+        }
+        return itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(itemId, unitId)
+                .orElseGet(() -> itemUnitRepository.findById(unitId).orElse(null));
+    }
+
+    private boolean sameMultiplier(ItemUnit left, ItemUnit right) {
+        if (left == null || right == null || left.getMultiplierToBase() == null || right.getMultiplierToBase() == null) {
+            return false;
+        }
+        return left.getMultiplierToBase().compareTo(right.getMultiplierToBase()) == 0;
+    }
+
+    private boolean sameText(String left, String right) {
+        if (left == null || right == null) {
+            return false;
+        }
+        return left.trim().equalsIgnoreCase(right.trim());
+    }
+
     @Override
     public StockTransferResponseDto getStockTransferById(Long transferId) {
         StockTransfer transfer = stockTransferRepository.findById(transferId)
@@ -562,16 +893,31 @@ public class StockServiceImpl implements StockService {
     private StockTransferResponseDto mapStockTransfer(StockTransfer transfer) {
         List<StockTransferItemResponseDto> items = stockTransferItemRepository.findByTransferId(transfer.getTransferId())
                 .stream()
-                .map(i -> StockTransferItemResponseDto.builder()
-                        .transferItemId(i.getTransferItemId())
-                        .transferId(i.getTransferId())
-                        .itemId(i.getItemId())
-                        .variantId(i.getVariantId())
-                        .variantSku(resolveVariantSku(i.getVariantId()))
-                        .variantLabel(resolveVariantLabel(i.getVariantId()))
-                        .internalBatchBarcode(i.getInternalBatchBarcode())
-                        .quantity(i.getQuantity())
-                        .build())
+                .map(i -> {
+                    Item sourceItem = findItemInBranchOrNull(transfer.getFromBranchId(), i.getItemId());
+                    Item destinationItem = resolveDestinationItemOrNull(sourceItem, transfer.getToBranchId());
+                    ItemVariant sourceVariant = findVariantOrNull(i.getItemId(), i.getVariantId());
+                    ItemVariant destinationVariant = findDestinationVariant(sourceVariant, destinationItem).orElse(null);
+                    ItemUnit unit = findTransferUnitOrNull(i.getItemId(), i.getUnitId());
+
+                    return StockTransferItemResponseDto.builder()
+                            .transferItemId(i.getTransferItemId())
+                            .transferId(i.getTransferId())
+                            .itemId(i.getItemId())
+                            .itemName(sourceItem != null ? sourceItem.getName() : null)
+                            .itemSku(sourceItem != null ? sourceItem.getSku() : null)
+                            .variantId(i.getVariantId())
+                            .variantSku(resolveVariantSku(i.getVariantId()))
+                            .variantLabel(resolveVariantLabel(i.getVariantId()))
+                            .destinationItemId(destinationItem != null ? destinationItem.getItemId() : null)
+                            .destinationVariantId(destinationVariant != null ? destinationVariant.getVariantId() : null)
+                            .unitId(i.getUnitId())
+                            .unitName(resolveUnitName(unit))
+                            .unitQuantity(unit != null ? toResponseUnitQty(i.getQuantity(), unit) : i.getQuantity())
+                            .internalBatchBarcode(i.getInternalBatchBarcode())
+                            .quantity(i.getQuantity())
+                            .build();
+                })
                 .toList();
 
         return StockTransferResponseDto.builder()
@@ -1021,7 +1367,7 @@ public class StockServiceImpl implements StockService {
             return null;
         }
         return itemVariantRepository.findById(variantId)
-                .map(ItemVariant::getSku)
+                .map(variant -> variant.getSku() != null ? variant.getSku() : variant.getVariantSku())
                 .orElse(null);
     }
 

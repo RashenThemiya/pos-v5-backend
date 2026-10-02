@@ -8,7 +8,8 @@ import java.math.BigDecimal;
 public class StockTransferItemRequestDto {
     private Long itemId;
     private Long variantId;
+    private Long unitId;
     private Long stockBatchId;
     private String internalBatchBarcode;
-    private BigDecimal quantity; // base qty
+    private BigDecimal quantity;
 }
