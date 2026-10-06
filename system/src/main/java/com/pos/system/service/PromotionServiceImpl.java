@@ -84,7 +84,7 @@ public class PromotionServiceImpl implements PromotionService {
     @Override
     public List<PromotionResponse> getActivePromotionsByBranch(Long branchId) {
         return promotionRepository.findActiveByBranchIdAndNow(branchId, LocalDateTime.now())
-                .stream().map(p -> mapPromotion(p, false)).toList();
+                .stream().map(p -> mapActivePromotions(p, true)).toList();
     }
 
     @Override

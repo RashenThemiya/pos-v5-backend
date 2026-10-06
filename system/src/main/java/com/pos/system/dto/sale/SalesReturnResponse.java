@@ -22,6 +22,9 @@ public class SalesReturnResponse {
     private LocalDateTime returnDate;
     private String refundMethod;
     private BigDecimal refundAmount;
+    private ReturnVoucherResponse voucher;
+    private String voucherNo;
+    private BigDecimal voucherRemainingAmount;
     private String reason;
     private Long processedBy;
     private String status;

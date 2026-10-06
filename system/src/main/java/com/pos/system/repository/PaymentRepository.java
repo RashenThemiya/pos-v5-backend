@@ -9,4 +9,5 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     List<Payment> findByOrderId(Long orderId);
     List<Payment> findByCashSessionId(Long cashSessionId);
     List<Payment> findByBranchId(Long branchId);
+    List<Payment> findByPaymentMethodIgnoreCaseAndReferenceNoIn(String paymentMethod, List<String> referenceNos);
 }

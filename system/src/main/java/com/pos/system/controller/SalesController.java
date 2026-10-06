@@ -142,6 +142,12 @@ public class SalesController {
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
+    @GetMapping("/return-vouchers/{voucherNoOrCode}")
+    public ResponseEntity<ReturnVoucherResponse> getReturnVoucher(@PathVariable String voucherNoOrCode) {
+        return ResponseEntity.ok(salesService.getReturnVoucher(voucherNoOrCode));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW')")
     @GetMapping("/returns/order/{orderId}")
     public ResponseEntity<List<SalesReturnResponse>> getReturnsByOrder(@PathVariable Long orderId) {
         return ResponseEntity.ok(salesService.getReturnsByOrder(orderId));

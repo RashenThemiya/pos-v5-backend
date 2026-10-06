@@ -38,6 +38,8 @@ import java.util.UUID;
 @Transactional
 public class SalesServiceImpl implements SalesService {
 
+    private static final String RETURN_VOUCHER_PAYMENT_METHOD = "RETURN_VOUCHER";
+
     private final CustomerOrderRepository orderRepository;
     private final OrderProductRepository orderProductRepository;
     private final PaymentRepository paymentRepository;
@@ -64,6 +66,8 @@ public class SalesServiceImpl implements SalesService {
 
     @Override
     public OrderResponse processSale(ProcessSaleRequest request) {
+        validateProcessSaleReturnVoucherPayments(request.getPayments());
+
         CreateOrderRequest orderRequest = new CreateOrderRequest();
         orderRequest.setBranchId(request.getBranchId());
         orderRequest.setUserId(request.getUserId());
@@ -318,6 +322,7 @@ public class SalesServiceImpl implements SalesService {
         if (request.getPayments() == null || request.getPayments().isEmpty()) {
             throw new RuntimeException("At least one payment line is required");
         }
+        validatePaymentRequestReturnVoucherPayments(request.getPayments());
 
         BigDecimal orderTotal = nvl(order.getTotal());
         BigDecimal runningPaid = paymentRepository.findByOrderId(orderId).stream()
@@ -472,6 +477,17 @@ public class SalesServiceImpl implements SalesService {
     }
 
     @Override
+    public ReturnVoucherResponse getReturnVoucher(String voucherNoOrCode) {
+        Long returnId = resolveReturnVoucherId(voucherNoOrCode)
+                .orElseThrow(() -> new RuntimeException("Return voucher not found: " + voucherNoOrCode));
+        SalesReturn salesReturn = findReturnById(returnId);
+        if (!RETURN_VOUCHER_PAYMENT_METHOD.equalsIgnoreCase(salesReturn.getRefundMethod())) {
+            throw new RuntimeException("This return was not issued as a return voucher");
+        }
+        return buildReturnVoucherResponse(salesReturn);
+    }
+
+    @Override
     public List<SalesReturnResponse> getReturnsByOrder(Long orderId) {
         return returnRepository.findByOrderId(orderId)
                 .stream().map(this::buildReturnResponse).toList();
@@ -518,11 +534,20 @@ public class SalesServiceImpl implements SalesService {
             StockBatch batch = stockBatchRepository
                     .findByBranchIdAndInternalBatchBarcode(branchId, item.getBatchBarcode())
                     .orElseThrow(() -> new RuntimeException("Batch not found: " + item.getBatchBarcode()));
+            if (!batch.getItemId().equals(item.getItemId())) {
+                throw new RuntimeException("Batch does not belong to selected item");
+            }
             if (!sameVariant(batch.getVariantId(), item.getVariantId())) {
                 throw new RuntimeException("Batch does not belong to selected variant");
             }
-            batch.setQtyRemaining(batch.getQtyRemaining().subtract(baseQty));
-            batch.setAvailableQty(nvlQty(batch.getAvailableQty()).subtract(baseQty));
+            BigDecimal batchRemainingQty = nvlQty(batch.getQtyRemaining());
+            BigDecimal batchAvailableQty = nvlQty(batch.getAvailableQty());
+            if (batchRemainingQty.compareTo(baseQty) < 0 || batchAvailableQty.compareTo(baseQty) < 0) {
+                throw new RuntimeException("Insufficient stock in selected batch: " + item.getBatchBarcode()
+                        + " (available: " + batchAvailableQty + ", required: " + baseQty + ")");
+            }
+            batch.setQtyRemaining(batchRemainingQty.subtract(baseQty));
+            batch.setAvailableQty(batchAvailableQty.subtract(baseQty));
             stockBatchRepository.save(batch);
         } else {
             // FIFO — deduct from oldest batches first
@@ -722,13 +747,15 @@ public class SalesServiceImpl implements SalesService {
                 .units(units.stream().map(this::mapSearchUnit).toList())
                 .variants(variants.stream().map(this::mapSearchVariant).toList())
                 .batches(batches.stream().map(this::mapSearchBatch).toList())
-                .promotions(findSalePromotions(item, variantId, matchedBatch))
+                .promotions(findSalePromotions(item, variantId, matchedBatch, batches))
                 .build();
     }
 
-    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, Long variantId, StockBatch matchedBatch) {
+    private List<SaleProductSearchResponse.PromotionDto> findSalePromotions(Item item, Long variantId, StockBatch matchedBatch,
+                                                                            List<StockBatch> candidateBatches) {
         List<SaleProductSearchResponse.PromotionDto> result = new ArrayList<>();
         List<Promotion> activePromotions = promotionRepository.findActiveByBranchIdAndNow(item.getBranchId(), LocalDateTime.now());
+        List<StockBatch> batchesToMatch = matchedBatch != null ? List.of(matchedBatch) : candidateBatches;
 
         for (Promotion promotion : activePromotions) {
             promotionItemRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
@@ -736,9 +763,10 @@ public class SalesServiceImpl implements SalesService {
                     .filter(promotionItem -> promotionItem.getVariantId() == null || promotionItem.getVariantId().equals(variantId))
                     .forEach(promotionItem -> result.add(mapSearchPromotion(promotion, promotionItem, null)));
 
-            if (matchedBatch != null) {
+            if (batchesToMatch != null && !batchesToMatch.isEmpty()) {
                 promotionBatchRepository.findByPromotionIdAndIsActiveTrue(promotion.getPromotionId()).stream()
-                        .filter(promotionBatch -> batchPromotionMatches(promotionBatch, matchedBatch))
+                        .filter(promotionBatch -> batchesToMatch.stream()
+                                .anyMatch(batch -> batchPromotionMatches(promotionBatch, batch)))
                         .forEach(promotionBatch -> result.add(mapSearchPromotion(promotion, null, promotionBatch)));
             }
         }
@@ -901,6 +929,56 @@ public class SalesServiceImpl implements SalesService {
         target.setReferenceNo(source.getReferenceNo());
         target.setNote(source.getNote());
         return target;
+    }
+
+    private void validateProcessSaleReturnVoucherPayments(List<ProcessSaleRequest.PaymentLineDto> payments) {
+        if (payments == null || payments.isEmpty()) {
+            return;
+        }
+        Map<Long, BigDecimal> requestedByReturnId = new LinkedHashMap<>();
+        for (ProcessSaleRequest.PaymentLineDto line : payments) {
+            if (RETURN_VOUCHER_PAYMENT_METHOD.equalsIgnoreCase(line.getPaymentMethod())) {
+                addReturnVoucherValidationLine(line.getReferenceNo(), line.getAmount(), requestedByReturnId);
+            }
+        }
+        validateReturnVoucherRequestedAmounts(requestedByReturnId);
+    }
+
+    private void validatePaymentRequestReturnVoucherPayments(List<PaymentRequest.PaymentLineDto> payments) {
+        if (payments == null || payments.isEmpty()) {
+            return;
+        }
+        Map<Long, BigDecimal> requestedByReturnId = new LinkedHashMap<>();
+        for (PaymentRequest.PaymentLineDto line : payments) {
+            if (RETURN_VOUCHER_PAYMENT_METHOD.equalsIgnoreCase(line.getPaymentMethod())) {
+                addReturnVoucherValidationLine(line.getReferenceNo(), line.getAmount(), requestedByReturnId);
+            }
+        }
+        validateReturnVoucherRequestedAmounts(requestedByReturnId);
+    }
+
+    private void addReturnVoucherValidationLine(String referenceNo, BigDecimal amount, Map<Long, BigDecimal> requestedByReturnId) {
+        Long returnId = resolveReturnVoucherId(referenceNo)
+                .orElseThrow(() -> new RuntimeException("Valid return voucher reference is required"));
+        BigDecimal requestedAmount = nvl(amount);
+        if (requestedAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new RuntimeException("Return voucher amount must be greater than 0");
+        }
+        requestedByReturnId.merge(returnId, requestedAmount, BigDecimal::add);
+    }
+
+    private void validateReturnVoucherRequestedAmounts(Map<Long, BigDecimal> requestedByReturnId) {
+        for (Map.Entry<Long, BigDecimal> entry : requestedByReturnId.entrySet()) {
+            SalesReturn salesReturn = findReturnById(entry.getKey());
+            if (!RETURN_VOUCHER_PAYMENT_METHOD.equalsIgnoreCase(salesReturn.getRefundMethod())) {
+                throw new RuntimeException("This return was not issued as a return voucher: " + entry.getKey());
+            }
+            ReturnVoucherResponse voucher = buildReturnVoucherResponse(salesReturn);
+            if (entry.getValue().compareTo(nvl(voucher.getRemainingAmount())) > 0) {
+                throw new RuntimeException("Return voucher balance is insufficient. Remaining: "
+                        + voucher.getRemainingAmount() + ", requested: " + entry.getValue());
+            }
+        }
     }
 
     private BigDecimal resolveAppliedPaymentAmount(PaymentRequest.PaymentLineDto line, BigDecimal remainingDue) {
@@ -1168,9 +1246,73 @@ public class SalesServiceImpl implements SalesService {
                 .build();
     }
 
+    private Optional<Long> resolveReturnVoucherId(String voucherNoOrCode) {
+        if (voucherNoOrCode == null || voucherNoOrCode.isBlank()) {
+            return Optional.empty();
+        }
+
+        String normalized = voucherNoOrCode.trim().toUpperCase();
+        String candidate = normalized
+                .replaceFirst("^(RV|RET|RETURN|VOUCHER)[\\s#-]*", "")
+                .trim();
+
+        if (!candidate.matches("\\d+")) {
+            candidate = normalized.replaceFirst("^.*?(\\d+)$", "$1");
+        }
+
+        if (!candidate.matches("\\d+")) {
+            return Optional.empty();
+        }
+
+        return Optional.of(Long.parseLong(candidate));
+    }
+
+    private String getReturnVoucherNo(Long returnId) {
+        return "RV-" + returnId;
+    }
+
+    private List<String> getReturnVoucherReferenceNos(Long returnId) {
+        String id = String.valueOf(returnId);
+        return List.of(getReturnVoucherNo(returnId), "RET-" + id, "RETURN-" + id, id);
+    }
+
+    private BigDecimal getReturnVoucherUsedAmount(Long returnId) {
+        return paymentRepository
+                .findByPaymentMethodIgnoreCaseAndReferenceNoIn(RETURN_VOUCHER_PAYMENT_METHOD, getReturnVoucherReferenceNos(returnId))
+                .stream()
+                .map(payment -> nvl(payment.getAmount()))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private ReturnVoucherResponse buildReturnVoucherResponse(SalesReturn r) {
+        BigDecimal originalAmount = nvl(r.getRefundAmount());
+        BigDecimal usedAmount = getReturnVoucherUsedAmount(r.getReturnId()).min(originalAmount);
+        BigDecimal remainingAmount = originalAmount.subtract(usedAmount).max(BigDecimal.ZERO);
+        String status = remainingAmount.compareTo(BigDecimal.ZERO) <= 0
+                ? "USED"
+                : usedAmount.compareTo(BigDecimal.ZERO) > 0 ? "PARTIALLY_USED" : "ACTIVE";
+
+        return ReturnVoucherResponse.builder()
+                .returnId(r.getReturnId())
+                .orderId(r.getOrderId())
+                .branchId(r.getBranchId())
+                .customerId(r.getCustomerId())
+                .voucherNo(getReturnVoucherNo(r.getReturnId()))
+                .redemptionCode(getReturnVoucherNo(r.getReturnId()))
+                .originalAmount(originalAmount)
+                .usedAmount(usedAmount)
+                .remainingAmount(remainingAmount)
+                .status(status)
+                .returnDate(r.getReturnDate())
+                .build();
+    }
+
     private SalesReturnResponse buildReturnResponse(SalesReturn r) {
         String invoiceNo = orderRepository.findById(r.getOrderId())
                 .map(CustomerOrder::getInvoiceNo).orElse(null);
+        ReturnVoucherResponse voucher = RETURN_VOUCHER_PAYMENT_METHOD.equalsIgnoreCase(r.getRefundMethod())
+                ? buildReturnVoucherResponse(r)
+                : null;
 
         List<SalesReturnResponse.ReturnItemResponse> items = returnItemRepository.findByReturnId(r.getReturnId())
                 .stream().map(ri -> {
@@ -1200,6 +1342,9 @@ public class SalesServiceImpl implements SalesService {
                 .returnDate(r.getReturnDate())
                 .refundMethod(r.getRefundMethod())
                 .refundAmount(r.getRefundAmount())
+                .voucher(voucher)
+                .voucherNo(voucher != null ? voucher.getVoucherNo() : null)
+                .voucherRemainingAmount(voucher != null ? voucher.getRemainingAmount() : null)
                 .reason(r.getReason())
                 .processedBy(r.getProcessedBy())
                 .status(r.getStatus())

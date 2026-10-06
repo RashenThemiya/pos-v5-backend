@@ -32,6 +32,7 @@ public interface SalesService {
     // Returns
     SalesReturnResponse createReturn(SalesReturnRequest request);
     SalesReturnResponse getReturnById(Long returnId);
+    ReturnVoucherResponse getReturnVoucher(String voucherNoOrCode);
     List<SalesReturnResponse> getReturnsByOrder(Long orderId);
     List<SalesReturnResponse> getReturnsByBranch(Long branchId);
     Page<SalesReturnResponse> getReturnsByBranch(Long branchId, Pageable pageable);
