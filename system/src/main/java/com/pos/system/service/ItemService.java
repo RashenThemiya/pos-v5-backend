@@ -826,10 +826,7 @@ public class ItemService {
         }
 
         String normalized = unitName.trim().toUpperCase();
-        return unitMasterRepository.findByBranchId(branchId)
-                .stream()
-                .filter(unit -> normalized.equals(unit.getName()))
-                .findFirst()
+        return unitMasterRepository.findFirstByBranchIdAndNameIgnoreCase(branchId, normalized)
                 .orElseGet(() -> {
                     UnitMaster unit = new UnitMaster();
                     unit.setBranchId(branchId);

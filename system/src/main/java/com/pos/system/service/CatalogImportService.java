@@ -138,7 +138,8 @@ public class CatalogImportService {
                 }
             }
             if (!StringUtils.hasText(item.getImage())) {
-                item.setImage(clean(variantRow.get("source_image_url")));
+                String sourceImageUrl = clean(variantRow.get("source_image_url"));
+                item.setImage(sourceImageUrl != null && sourceImageUrl.length() <= 255 ? sourceImageUrl : null);
             }
             item = itemRepository.save(item);
 
@@ -197,7 +198,9 @@ public class CatalogImportService {
         unit.setMasterUnitId(master.getUnitId());
         unit.setUnitName(unitName);
         unit.setMultiplierToBase(decimal(unitRow == null ? null : unitRow.get("conversion_qty"), BigDecimal.ONE));
-        unit.setBarcode(firstBarcode(variantRow.get("barcode")));
+        String barcode = firstBarcode(variantRow.get("barcode"));
+        unit.setBarcode(StringUtils.hasText(barcode) && !itemUnitRepository.existsByBranchIdAndBarcode(branchId, barcode)
+                ? barcode : null);
         unit.setDefaultSellingPrice(BigDecimal.ZERO);
         unit.setIsBaseUnit(true);
         unit.setIsActive(unitRow == null || parseBoolean(unitRow.get("active"), true));
@@ -237,6 +240,9 @@ public class CatalogImportService {
         ZipEntry entry = findEntry(zip, fileName);
         if (entry == null) throw new RuntimeException("Missing " + fileName + " in catalog ZIP");
         String text = new String(readLimited(zip, entry, MAX_CSV_BYTES), StandardCharsets.UTF_8);
+        if (!text.isEmpty() && text.charAt(0) == '\uFEFF') {
+            text = text.substring(1);
+        }
         List<List<String>> records = parseCsv(text);
         if (records.isEmpty()) return List.of();
         List<String> headers = records.get(0);
@@ -313,6 +319,8 @@ public class CatalogImportService {
     }
     private static String firstBarcode(String value) {
         String cleaned = clean(value);
+        if (!StringUtils.hasText(cleaned)) return null;
+        cleaned = cleaned.replaceAll("[^A-Za-z0-9._-]+", " ").trim();
         if (!StringUtils.hasText(cleaned)) return null;
         return limit(cleaned.split("\\s+")[0], 100);
     }

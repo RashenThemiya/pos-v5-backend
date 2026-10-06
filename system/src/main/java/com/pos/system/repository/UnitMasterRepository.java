@@ -10,6 +10,7 @@ public interface UnitMasterRepository extends JpaRepository<UnitMaster, Long> {
     List<UnitMaster> findByBranchId(Long branchId);
     List<UnitMaster> findByBranchIdAndIsActive(Long branchId, Boolean isActive);
     Optional<UnitMaster> findByUnitIdAndBranchId(Long unitId, Long branchId);
+    Optional<UnitMaster> findFirstByBranchIdAndNameIgnoreCase(Long branchId, String name);
     boolean existsByBranchIdAndName(Long branchId, String name);
     boolean existsByBranchIdAndNameAndUnitIdNot(Long branchId, String name, Long unitId);
 }

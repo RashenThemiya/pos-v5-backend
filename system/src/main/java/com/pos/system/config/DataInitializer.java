@@ -286,10 +286,8 @@ public class DataInitializer implements CommandLineRunner {
             }
 
             String normalizedName = itemUnit.getUnitName().trim().toUpperCase();
-            UnitMaster masterUnit = unitMasterRepository.findByBranchId(itemUnit.getBranchId())
-                    .stream()
-                    .filter(unit -> normalizedName.equals(unit.getName()))
-                    .findFirst()
+            UnitMaster masterUnit = unitMasterRepository
+                    .findFirstByBranchIdAndNameIgnoreCase(itemUnit.getBranchId(), normalizedName)
                     .orElseGet(() -> {
                         UnitMaster unit = new UnitMaster();
                         unit.setBranchId(itemUnit.getBranchId());

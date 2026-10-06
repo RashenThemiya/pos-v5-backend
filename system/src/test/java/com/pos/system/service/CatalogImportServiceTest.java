@@ -21,4 +21,15 @@ class CatalogImportServiceTest {
         assertEquals("[\"Food\",\"Snacks\"]", rows.get(1).get(1));
         assertEquals("line one\nline two", rows.get(1).get(2));
     }
+
+    @Test
+    void parsesBomWhenCallerRemovesIt() {
+        String csv = "\uFEFF\"item_name\",\"sku\"\r\n\"Product\",\"SKU-1\"\r\n";
+        csv = csv.substring(1);
+
+        List<List<String>> rows = CatalogImportService.parseCsv(csv);
+
+        assertEquals("item_name", rows.get(0).get(0));
+        assertEquals("Product", rows.get(1).get(0));
+    }
 }
