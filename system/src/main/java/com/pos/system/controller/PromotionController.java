@@ -1,12 +1,16 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.promotion.*;
+import com.pos.system.dto.promotion.PromotionAnalyticsResponse.*;
+import com.pos.system.service.PromotionAnalyticsService;
 import com.pos.system.service.PromotionService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -16,6 +20,7 @@ import java.util.List;
 public class PromotionController {
 
     private final PromotionService promotionService;
+    private final PromotionAnalyticsService promotionAnalyticsService;
 
     // ─── Promotion CRUD ──────────────────────────────────────────────────────────
 
@@ -55,6 +60,97 @@ public class PromotionController {
     @GetMapping("/branch/{branchId}/active")
     public ResponseEntity<List<PromotionResponse>> getActivePromotionsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(promotionService.getActivePromotionsByBranch(branchId));
+    }
+
+    // Analytics
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}")
+    public ResponseEntity<PromotionAnalyticsResponse> getPromotionAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "REVENUE") String sortBy,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getAnalytics(
+                branchId, from, to, dateRange, sortBy, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/summary")
+    public ResponseEntity<Summary> getPromotionAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/trend")
+    public ResponseEntity<List<TrendBucket>> getPromotionAnalyticsTrend(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getTrend(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/type-performance")
+    public ResponseEntity<List<TypePerformance>> getPromotionTypePerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getTypePerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/status")
+    public ResponseEntity<StatusBreakdown> getPromotionStatus(@PathVariable Long branchId) {
+        return ResponseEntity.ok(promotionAnalyticsService.getStatus(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/top-promotions")
+    public ResponseEntity<List<TopPromotion>> getTopPromotions(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "REVENUE") String sortBy,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getTopPromotions(
+                branchId, from, to, dateRange, sortBy, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/notifications")
+    public ResponseEntity<List<Notification>> getPromotionNotifications(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.getNotifications(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_UPDATE') or hasAuthority('DASHBOARD_VIEW')")
+    @PatchMapping("/analytics/branch/{branchId}/notifications/mark-all-read")
+    public ResponseEntity<NotificationReadResponse> markPromotionNotificationsRead(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(promotionAnalyticsService.markAllNotificationsRead(branchId, from, to, dateRange));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_UPDATE')")

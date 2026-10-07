@@ -1,7 +1,9 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.sale.*;
+import com.pos.system.dto.sale.SalesReturnAnalyticsResponse.*;
 import com.pos.system.service.SalesService;
+import com.pos.system.service.SalesReturnAnalyticsService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +15,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.List;
 
 @RestController
@@ -22,6 +25,7 @@ import java.util.List;
 public class SalesController {
 
     private final SalesService salesService;
+    private final SalesReturnAnalyticsService salesReturnAnalyticsService;
 
     // ─── Unified Cashier Sale ─────────────────────────────────────────────────
 
@@ -125,6 +129,106 @@ public class SalesController {
     @GetMapping("/orders/{orderId}/payments")
     public ResponseEntity<List<PaymentResponse>> getPaymentsByOrder(@PathVariable Long orderId) {
         return ResponseEntity.ok(salesService.getPaymentsByOrder(orderId));
+    }
+
+    // Sales and Return Analytics
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}")
+    public ResponseEntity<SalesReturnAnalyticsResponse> getSalesReturnAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int productLimit,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime startTime,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime endTime,
+            @RequestParam(defaultValue = "120") int slotMinutes) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getAnalytics(
+                branchId, from, to, dateRange, productLimit, startTime, endTime, slotMinutes));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/summary")
+    public ResponseEntity<KpiSummary> getSalesReturnAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/performance")
+    public ResponseEntity<List<PerformanceBucket>> getSalesReturnPerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getPerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/customer-engagement")
+    public ResponseEntity<CustomerEngagement> getSalesReturnCustomerEngagement(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getCustomerEngagement(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/payment-methods")
+    public ResponseEntity<PaymentMethods> getSalesReturnPaymentMethods(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getPaymentMethods(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/top-products")
+    public ResponseEntity<TopProducts> getSalesReturnTopProducts(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getTopProducts(branchId, from, to, dateRange, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/return-performance")
+    public ResponseEntity<ReturnPerformance> getSalesReturnReturnPerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getReturnPerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SALE_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/activity")
+    public ResponseEntity<ActivityResponse> getSalesReturnActivity(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime startTime,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.TIME) LocalTime endTime,
+            @RequestParam(defaultValue = "120") int slotMinutes) {
+
+        return ResponseEntity.ok(salesReturnAnalyticsService.getActivity(
+                branchId, from, to, dateRange, startTime, endTime, slotMinutes));
     }
 
     // ─── Returns ─────────────────────────────────────────────────────────────────

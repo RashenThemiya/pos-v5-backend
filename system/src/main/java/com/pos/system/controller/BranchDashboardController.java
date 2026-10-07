@@ -1,7 +1,10 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.dashboard.BranchDashboardResponse;
+import com.pos.system.dto.dashboard.BranchOverviewResponse;
+import com.pos.system.dto.dashboard.BranchOverviewResponse.*;
 import com.pos.system.service.BranchDashboardService;
+import com.pos.system.service.BranchOverviewService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
@@ -30,6 +33,7 @@ import java.time.LocalDateTime;
 public class BranchDashboardController {
 
     private final BranchDashboardService branchDashboardService;
+    private final BranchOverviewService branchOverviewService;
 
     /**
      * Full branch dashboard over an arbitrary date range.
@@ -68,5 +72,105 @@ public class BranchDashboardController {
             @PathVariable Long branchId) {
 
         return ResponseEntity.ok(branchDashboardService.getMonthDashboard(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview")
+    public ResponseEntity<BranchOverviewResponse> getBranchOverview(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "5") int productLimit,
+            @RequestParam(defaultValue = "10") int lowStockLimit,
+            @RequestParam(defaultValue = "10") int recentLimit,
+            @RequestParam(defaultValue = "10") int attentionLimit) {
+
+        return ResponseEntity.ok(branchOverviewService.getOverview(
+                branchId, from, to, dateRange, productLimit, lowStockLimit, recentLimit, attentionLimit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/summary")
+    public ResponseEntity<Summary> getBranchOverviewSummary(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+
+        return ResponseEntity.ok(branchOverviewService.getSummary(branchId, from, to));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/today-snapshot")
+    public ResponseEntity<TodaySnapshot> getTodaySnapshot(@PathVariable Long branchId) {
+        return ResponseEntity.ok(branchOverviewService.getTodaySnapshot(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/sales-return-performance")
+    public ResponseEntity<SalesReturnPerformance> getSalesReturnPerformance(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+
+        return ResponseEntity.ok(branchOverviewService.getSalesReturnPerformance(branchId, from, to));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/payment-methods")
+    public ResponseEntity<PaymentMethods> getPaymentMethods(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+
+        return ResponseEntity.ok(branchOverviewService.getPaymentMethods(branchId, from, to));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/top-products")
+    public ResponseEntity<TopProducts> getTopProducts(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "5") int limit) {
+
+        return ResponseEntity.ok(branchOverviewService.getTopProducts(branchId, from, to, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/promotions")
+    public ResponseEntity<PromotionPerformance> getPromotionPerformance(
+            @PathVariable Long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+
+        return ResponseEntity.ok(branchOverviewService.getPromotionPerformance(branchId, from, to));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/inventory")
+    public ResponseEntity<InventoryStatus> getInventoryStatus(
+            @PathVariable Long branchId,
+            @RequestParam(defaultValue = "10") int lowStockLimit) {
+
+        return ResponseEntity.ok(branchOverviewService.getInventoryStatus(branchId, lowStockLimit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/attention")
+    public ResponseEntity<AttentionPanel> getAttention(
+            @PathVariable Long branchId,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(branchOverviewService.getAttention(branchId, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/{branchId}/overview/recent-transactions")
+    public ResponseEntity<RecentTransactions> getRecentTransactions(
+            @PathVariable Long branchId,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(branchOverviewService.getRecentTransactions(branchId, limit));
     }
 }

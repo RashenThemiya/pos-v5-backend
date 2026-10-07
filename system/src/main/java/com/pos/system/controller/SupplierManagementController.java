@@ -1,16 +1,22 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.supplier.*;
+import com.pos.system.dto.supplier.PurchaseOrderAnalyticsResponse.*;
+import com.pos.system.dto.supplier.PurchaseReturnAnalyticsResponse.*;
+import com.pos.system.service.PurchaseOrderAnalyticsService;
+import com.pos.system.service.PurchaseReturnAnalyticsService;
 import com.pos.system.service.SupplierManagementService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -20,6 +26,8 @@ import java.util.List;
 public class SupplierManagementController {
 
     private final SupplierManagementService supplierManagementService;
+    private final PurchaseOrderAnalyticsService purchaseOrderAnalyticsService;
+    private final PurchaseReturnAnalyticsService purchaseReturnAnalyticsService;
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_CREATE')")
     @PostMapping
@@ -89,6 +97,83 @@ public class SupplierManagementController {
             @ModelAttribute PurchaseOrderSearchRequestDto request,
             @PageableDefault(size = 25, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(supplierManagementService.searchPurchaseOrdersByBranch(branchId, request, pageable));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}")
+    public ResponseEntity<PurchaseOrderAnalyticsResponse> getPurchaseOrderAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getAnalytics(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/summary")
+    public ResponseEntity<Summary> getPurchaseOrderAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/spend-trend")
+    public ResponseEntity<List<SpendBucket>> getPurchaseOrderSpendTrend(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getSpendTrend(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/status")
+    public ResponseEntity<StatusBreakdown> getPurchaseOrderAnalyticsStatus(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getStatus(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/receiving-performance")
+    public ResponseEntity<ReceivingPerformance> getPurchaseOrderReceivingPerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getReceivingPerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/value-distribution")
+    public ResponseEntity<List<ValueDistribution>> getPurchaseOrderValueDistribution(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getValueDistribution(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PO_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-orders/analytics/branch/{branchId}/payment-exposure")
+    public ResponseEntity<PaymentExposure> getPurchaseOrderPaymentExposure(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseOrderAnalyticsService.getPaymentExposure(branchId, from, to, dateRange));
     }
 
     // SUPPLY / GRN
@@ -237,6 +322,101 @@ public class SupplierManagementController {
             @ModelAttribute PurchaseReturnSearchRequestDto request,
             @PageableDefault(size = 25, sort = "returnDate", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(supplierManagementService.searchPurchaseReturnsByBranch(branchId, request, pageable));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}")
+    public ResponseEntity<PurchaseReturnAnalyticsResponse> getPurchaseReturnAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int supplierLimit,
+            @RequestParam(defaultValue = "10") int itemLimit) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getAnalytics(
+                branchId, from, to, dateRange, supplierLimit, itemLimit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/summary")
+    public ResponseEntity<ReturnSummary> getPurchaseReturnAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/trend")
+    public ResponseEntity<List<TrendBucket>> getPurchaseReturnTrend(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getTrend(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/return-status")
+    public ResponseEntity<List<ReturnStatusEntry>> getPurchaseReturnStatusAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getReturnStatus(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/refund-status")
+    public ResponseEntity<RefundStatus> getPurchaseReturnRefundStatus(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getRefundStatus(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/supplier-analysis")
+    public ResponseEntity<List<SupplierReturnEntry>> getPurchaseReturnSupplierAnalysis(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getSupplierAnalysis(
+                branchId, from, to, dateRange, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/pending-aging")
+    public ResponseEntity<List<AgingBucket>> getPurchaseReturnPendingAging(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getPendingAging(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/purchase-returns/analytics/branch/{branchId}/most-returned-items")
+    public ResponseEntity<List<ReturnedItemEntry>> getMostReturnedPurchaseItems(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(purchaseReturnAnalyticsService.getMostReturnedItems(
+                branchId, from, to, dateRange, limit));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PURCHASE_RETURN_VIEW')")
