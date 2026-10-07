@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +16,11 @@ public interface SupplyRepository extends JpaRepository<Supply, Long>, JpaSpecif
     Optional<Supply> findByGrnNo(String grnNo);
 
     List<Supply> findByBranchId(Long branchId);
+
+    List<Supply> findByBranchIdAndSupplyDateBetweenOrderBySupplyDateDesc(
+            Long branchId,
+            LocalDateTime from,
+            LocalDateTime to);
 
     List<Supply> findByPoId(Long poId);
     @Query("select supply from Supply supply where supply.poId in :poIds")

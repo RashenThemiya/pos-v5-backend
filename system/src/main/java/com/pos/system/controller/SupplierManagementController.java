@@ -3,8 +3,10 @@ package com.pos.system.controller;
 import com.pos.system.dto.supplier.*;
 import com.pos.system.dto.supplier.PurchaseOrderAnalyticsResponse.*;
 import com.pos.system.dto.supplier.PurchaseReturnAnalyticsResponse.*;
+import com.pos.system.dto.supplier.SupplyGrnAnalyticsResponse.*;
 import com.pos.system.service.PurchaseOrderAnalyticsService;
 import com.pos.system.service.PurchaseReturnAnalyticsService;
+import com.pos.system.service.SupplyGrnAnalyticsService;
 import com.pos.system.service.SupplierManagementService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
@@ -28,6 +30,7 @@ public class SupplierManagementController {
     private final SupplierManagementService supplierManagementService;
     private final PurchaseOrderAnalyticsService purchaseOrderAnalyticsService;
     private final PurchaseReturnAnalyticsService purchaseReturnAnalyticsService;
+    private final SupplyGrnAnalyticsService supplyGrnAnalyticsService;
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLIER_CREATE')")
     @PostMapping
@@ -210,6 +213,101 @@ public class SupplierManagementController {
             @ModelAttribute SupplySearchRequestDto request,
             @PageableDefault(size = 25, sort = "supplyDate", direction = Sort.Direction.DESC) Pageable pageable) {
         return ResponseEntity.ok(supplierManagementService.searchSuppliesByBranch(branchId, request, pageable));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}")
+    public ResponseEntity<SupplyGrnAnalyticsResponse> getSupplyGrnAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int supplierLimit,
+            @RequestParam(defaultValue = "10") int itemLimit) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getAnalytics(
+                branchId, from, to, dateRange, supplierLimit, itemLimit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/summary")
+    public ResponseEntity<GrnSummary> getSupplyGrnAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/trend")
+    public ResponseEntity<List<ReceivingTrendBucket>> getSupplyGrnReceivingTrend(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getTrend(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/receiving-status")
+    public ResponseEntity<ReceivingStatus> getSupplyGrnReceivingStatus(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getReceivingStatus(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/payment-status")
+    public ResponseEntity<GrnPaymentStatus> getSupplyGrnPaymentStatus(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getPaymentStatus(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/completion")
+    public ResponseEntity<ReceivingCompletion> getSupplyGrnCompletion(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getCompletion(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/supplier-receiving")
+    public ResponseEntity<List<SupplierReceivingEntry>> getSupplyGrnSupplierReceiving(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getSupplierReceiving(
+                branchId, from, to, dateRange, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/supplies/analytics/branch/{branchId}/top-received-items")
+    public ResponseEntity<List<TopReceivedItem>> getSupplyGrnTopReceivedItems(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(supplyGrnAnalyticsService.getTopReceivedItems(
+                branchId, from, to, dateRange, limit));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('SUPPLY_VIEW')")

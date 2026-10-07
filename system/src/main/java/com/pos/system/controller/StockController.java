@@ -1,16 +1,20 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.stock.*;
+import com.pos.system.dto.stock.StockAnalyticsResponse.*;
+import com.pos.system.service.StockAnalyticsService;
 import com.pos.system.service.StockService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.web.PageableDefault;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -20,6 +24,7 @@ import java.util.List;
 public class StockController {
 
     private final StockService stockService;
+    private final StockAnalyticsService stockAnalyticsService;
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW')")
     @GetMapping("/branch/{branchId}")
@@ -103,6 +108,97 @@ public class StockController {
     @PostMapping("/adjustments")
     public ResponseEntity<StockBatchResponseDto> adjustStock(@RequestBody StockAdjustRequest dto) {
         return ResponseEntity.ok(stockService.adjustStock(dto));
+    }
+
+    // Stock Analytics
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}")
+    public ResponseEntity<StockAnalyticsResponse> getStockAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int productLimit,
+            @RequestParam(defaultValue = "10") int slowLimit,
+            @RequestParam(defaultValue = "30") int slowWarningDays,
+            @RequestParam(defaultValue = "90") int slowCriticalDays) {
+
+        return ResponseEntity.ok(stockAnalyticsService.getAnalytics(
+                branchId, from, to, dateRange, productLimit, slowLimit, slowWarningDays, slowCriticalDays));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/summary")
+    public ResponseEntity<StockSummary> getStockAnalyticsSummary(@PathVariable Long branchId) {
+        return ResponseEntity.ok(stockAnalyticsService.getSummary(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/movement")
+    public ResponseEntity<List<MovementBucket>> getStockMovementAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(stockAnalyticsService.getMovement(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/health")
+    public ResponseEntity<InventoryHealth> getStockHealth(@PathVariable Long branchId) {
+        return ResponseEntity.ok(stockAnalyticsService.getHealth(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/value")
+    public ResponseEntity<InventoryValue> getStockInventoryValue(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(stockAnalyticsService.getInventoryValue(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/top-selling-products")
+    public ResponseEntity<List<TopSellingProduct>> getTopSellingStockProducts(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit) {
+
+        return ResponseEntity.ok(stockAnalyticsService.getTopSellingProducts(branchId, from, to, dateRange, limit));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/slow-moving-products")
+    public ResponseEntity<List<SlowMovingProduct>> getSlowMovingStockProducts(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(defaultValue = "10") int limit,
+            @RequestParam(defaultValue = "30") int slowWarningDays,
+            @RequestParam(defaultValue = "90") int slowCriticalDays) {
+
+        return ResponseEntity.ok(stockAnalyticsService.getSlowMovingProducts(
+                branchId, from, to, dateRange, limit, slowWarningDays, slowCriticalDays));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/analytics/branch/{branchId}/notifications")
+    public ResponseEntity<List<StockNotification>> getStockNotifications(@PathVariable Long branchId) {
+        return ResponseEntity.ok(stockAnalyticsService.getNotifications(branchId));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @PatchMapping("/analytics/branch/{branchId}/notifications/mark-all-read")
+    public ResponseEntity<NotificationReadResponse> markStockNotificationsRead(@PathVariable Long branchId) {
+        return ResponseEntity.ok(stockAnalyticsService.markAllNotificationsRead(branchId));
     }
 
     @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('STOCK_TRANSFER_CREATE')")
