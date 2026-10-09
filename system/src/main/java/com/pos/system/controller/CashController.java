@@ -1,12 +1,17 @@
 package com.pos.system.controller;
 
 import com.pos.system.dto.cash.*;
+import com.pos.system.dto.cash.CounterAnalyticsResponse.*;
 import com.pos.system.service.CashService;
+import com.pos.system.service.CounterAnalyticsService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @RestController
@@ -16,6 +21,7 @@ import java.util.List;
 public class CashController {
 
     private final CashService cashService;
+    private final CounterAnalyticsService counterAnalyticsService;
 
     // ─── Counters ────────────────────────────────────────────────────────────────
 
@@ -42,6 +48,106 @@ public class CashController {
     @GetMapping("/counters/branch/{branchId}")
     public ResponseEntity<List<CounterResponse>> getCountersByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(cashService.getCountersByBranch(branchId));
+    }
+
+    // Counter Analytics
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}")
+    public ResponseEntity<CounterAnalyticsResponse> getCounterAnalytics(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate trendDate) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getAnalytics(branchId, from, to, dateRange, trendDate));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/summary")
+    public ResponseEntity<CounterSummary> getCounterAnalyticsSummary(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getSummary(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/sales-performance")
+    public ResponseEntity<List<SalesPerformanceBucket>> getCounterSalesPerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getSalesPerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/counter-performance")
+    public ResponseEntity<List<CounterPerformanceEntry>> getCounterPerformance(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getCounterPerformance(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/cash-flow")
+    public ResponseEntity<CashFlow> getCounterCashFlow(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getCashFlow(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/sales-trend")
+    public ResponseEntity<List<HourlySalesTrend>> getCounterSalesTrend(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate trendDate) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getSalesTrend(branchId, trendDate));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/counter-usage")
+    public ResponseEntity<List<CounterUsageEntry>> getCounterUsage(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getCounterUsage(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @GetMapping("/counters/analytics/branch/{branchId}/variance-alerts")
+    public ResponseEntity<List<VarianceAlert>> getCounterVarianceAlerts(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.getVarianceAlerts(branchId, from, to, dateRange));
+    }
+
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('COUNTER_VIEW') or hasAuthority('DASHBOARD_VIEW')")
+    @PatchMapping("/counters/analytics/branch/{branchId}/variance-alerts/mark-all-read")
+    public ResponseEntity<NotificationReadResponse> markCounterVarianceAlertsRead(
+            @PathVariable Long branchId,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(defaultValue = "30D") String dateRange) {
+
+        return ResponseEntity.ok(counterAnalyticsService.markAllVarianceAlertsRead(branchId, from, to, dateRange));
     }
 
     // ─── Sessions ────────────────────────────────────────────────────────────────
