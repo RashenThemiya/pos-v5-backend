@@ -12,6 +12,7 @@ public class CreateOrderRequest {
     private Long customerId;        // nullable for walk-in
     private Long cashSessionId;
     private Long promotionId;       // nullable
+    private List<Long> billPromotionIds;
     private List<OrderProductRequest> items;
     private BigDecimal discount;    // bill-level discount
     private BigDecimal rounding;    // rounding adjustment

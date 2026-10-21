@@ -32,4 +32,6 @@ public class OrderResponse {
     private String notes;
     private List<OrderProductResponse> items;
     private List<PaymentResponse> payments;
+    private List<AppliedPromotionResponse> appliedPromotions;
+    private BigDecimal promotionDiscount;
 }

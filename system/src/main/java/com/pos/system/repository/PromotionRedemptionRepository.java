@@ -6,6 +6,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import java.util.List;
 
 public interface PromotionRedemptionRepository extends JpaRepository<PromotionRedemption, Long> {
+    List<PromotionRedemption> findByOrderId(Long orderId);
+    List<PromotionRedemption> findByBranchId(Long branchId);
     List<PromotionRedemption> findByPromotionId(Long promotionId);
     long countByPromotionId(Long promotionId);
     long countByPromotionIdAndCustomerId(Long promotionId, Long customerId);

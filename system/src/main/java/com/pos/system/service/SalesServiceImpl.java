@@ -11,6 +11,7 @@ import com.pos.system.model.cash.CashSessionTransaction;
 import com.pos.system.model.promotion.Promotion;
 import com.pos.system.model.promotion.PromotionBatch;
 import com.pos.system.model.promotion.PromotionItem;
+import com.pos.system.model.promotion.OrderProductPromotion;
 import com.pos.system.model.sale.*;
 import com.pos.system.model.stock.Stock;
 import com.pos.system.model.stock.StockBatch;
@@ -61,6 +62,7 @@ public class SalesServiceImpl implements SalesService {
     private final PromotionItemRepository promotionItemRepository;
     private final PromotionBatchRepository promotionBatchRepository;
     private final CustomerService customerService;
+    private final SalePromotionService salePromotionService;
 
     // ─── Orders ──────────────────────────────────────────────────────────────────
 
@@ -74,6 +76,7 @@ public class SalesServiceImpl implements SalesService {
         orderRequest.setCustomerId(request.getCustomerId());
         orderRequest.setCashSessionId(request.getCashSessionId());
         orderRequest.setItems(request.getItems());
+        orderRequest.setBillPromotionIds(request.getBillPromotionIds());
         orderRequest.setDiscount(request.getDiscount());
         orderRequest.setRounding(request.getRounding());
         orderRequest.setNotes(request.getNotes());
@@ -122,6 +125,9 @@ public class SalesServiceImpl implements SalesService {
         for (OrderProductRequest item : request.getItems()) {
             item.setVariantId(resolveOrderLineVariantId(request.getBranchId(), item));
             BigDecimal lineDiscount = nvl(item.getDiscount());
+            if (lineDiscount.signum() < 0 || lineDiscount.compareTo(item.getUnitPrice().multiply(item.getQuantity())) > 0) {
+                throw new IllegalArgumentException("Line discount must be between zero and the line subtotal");
+            }
             BigDecimal lineTotal = item.getUnitPrice()
                     .multiply(item.getQuantity())
                     .subtract(lineDiscount)
@@ -139,6 +145,7 @@ public class SalesServiceImpl implements SalesService {
             op.setLineTotal(lineTotal);
             op.setCreatedAt(LocalDateTime.now());
             orderProductRepository.save(op);
+            salePromotionService.recordLine(savedOrder, op, item.getPromotionId());
 
             subtotal = subtotal.add(lineTotal);
 
@@ -155,6 +162,14 @@ public class SalesServiceImpl implements SalesService {
 
         savedOrder.setSubtotal(subtotal);
         savedOrder.setTotal(total);
+        List<Long> billPromotionIds = request.getBillPromotionIds();
+        if ((billPromotionIds == null || billPromotionIds.isEmpty()) && request.getPromotionId() != null) {
+            billPromotionIds = List.of(request.getPromotionId());
+        }
+        if (savedOrder.getDiscount().signum() < 0 || savedOrder.getDiscount().compareTo(subtotal) > 0) {
+            throw new IllegalArgumentException("Bill discount must be between zero and the subtotal");
+        }
+        salePromotionService.recordBill(savedOrder, billPromotionIds);
         orderRepository.save(savedOrder);
 
         recordStatusHistory(savedOrder.getOrderId(), null, "COMPLETED", request.getUserId(), "Order created");
@@ -1099,6 +1114,7 @@ public class SalesServiceImpl implements SalesService {
     // ─── Mappers ─────────────────────────────────────────────────────────────────
 
     private OrderResponse buildOrderResponse(CustomerOrder order) {
+        List<AppliedPromotionResponse> appliedPromotions = salePromotionService.getAppliedPromotions(order.getOrderId());
         List<OrderProductResponse> items = orderProductRepository.findByOrderId(order.getOrderId())
                 .stream().map(this::mapOrderProduct).toList();
 
@@ -1124,6 +1140,9 @@ public class SalesServiceImpl implements SalesService {
                 .notes(order.getNotes())
                 .items(items)
                 .payments(payments)
+                .appliedPromotions(appliedPromotions)
+                .promotionDiscount(appliedPromotions.stream().map(AppliedPromotionResponse::getDiscountAmount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add))
                 .build();
     }
 
@@ -1192,6 +1211,7 @@ public class SalesServiceImpl implements SalesService {
     }
 
     private OrderProductResponse mapOrderProduct(OrderProduct op) {
+        OrderProductPromotion promotion = salePromotionService.getLinePromotion(op.getOrderProductId());
         String itemName = itemRepository.findById(op.getItemId())
                 .map(i -> i.getName()).orElse(null);
         ItemUnit unit = itemUnitRepository.findById(op.getUnitId()).orElse(null);
@@ -1211,6 +1231,10 @@ public class SalesServiceImpl implements SalesService {
                 .quantity(op.getQuantity())
                 .unitPrice(op.getUnitPrice())
                 .discount(op.getDiscount())
+                .promotionId(promotion != null ? promotion.getPromotionId() : null)
+                .promotionName(promotion != null ? promotion.getPromotionName() : null)
+                .promotionType(promotion != null ? promotion.getPromoType() : null)
+                .promotionValue(promotion != null ? promotion.getPromoValue() : null)
                 .lineTotal(op.getLineTotal())
                 .createdAt(op.getCreatedAt())
                 .build();

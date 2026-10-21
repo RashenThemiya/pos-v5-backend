@@ -28,6 +28,7 @@ public class OrderProductPromotion {
     private Long promotionId;
 
     private String promoType;
+    private String promotionName;
     private BigDecimal promoValue;
     private BigDecimal discountAmount;
     private LocalDateTime createdAt;

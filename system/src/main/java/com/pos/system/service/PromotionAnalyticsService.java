@@ -158,12 +158,19 @@ public class PromotionAnalyticsService {
         Branch branch = requireBranch(branchId);
         List<Promotion> promotions = promotionRepository.findByBranchId(branchId);
         Map<Long, Promotion> promotionsById = promotionMap(promotions);
-        List<PromotionRedemption> allRedemptions = promotions.stream()
-                .flatMap(promotion -> promotionRedemptionRepository
-                        .findByPromotionId(promotion.getPromotionId())
-                        .stream())
+        List<PromotionRedemption> allRedemptions = promotionRedemptionRepository.findByBranchId(branchId).stream()
                 .filter(redemption -> Objects.equals(branchId, redemption.getBranchId()))
                 .toList();
+        // Keep past usage visible even if the promotion record was removed.
+        for (PromotionRedemption redemption : allRedemptions) {
+            promotionsById.computeIfAbsent(redemption.getPromotionId(), id -> {
+                Promotion historical = new Promotion();
+                historical.setPromotionId(id);
+                historical.setName(redemption.getPromotionName() != null ? redemption.getPromotionName() : "Promotion #" + id);
+                historical.setType(redemption.getPromotionType());
+                return historical;
+            });
+        }
 
         Set<Long> orderIds = allRedemptions.stream()
                 .map(PromotionRedemption::getOrderId)
@@ -240,7 +247,8 @@ public class PromotionAnalyticsService {
                 continue;
             }
 
-            byType.computeIfAbsent(normalizeType(promotion.getType()), TypeAccumulator::new)
+            byType.computeIfAbsent(normalizeType(redemption.getPromotionType() != null
+                            ? redemption.getPromotionType() : promotion.getType()), TypeAccumulator::new)
                     .add(redemption, order);
         }
 
@@ -727,6 +735,9 @@ public class PromotionAnalyticsService {
 
     private static class PromotionAccumulator {
         private final Promotion promotion;
+        private String promotionName;
+        private String promotionType;
+        private LocalDateTime snapshotAt;
         private final Set<Long> orderIds = new HashSet<>();
         private long redemptions;
         private BigDecimal discountGiven = BigDecimal.ZERO;
@@ -737,6 +748,12 @@ public class PromotionAnalyticsService {
         }
 
         private void add(PromotionRedemption redemption, CustomerOrder order) {
+            LocalDateTime usedAt = redemption.getUsedAt() != null ? redemption.getUsedAt() : order.getOrderDate();
+            if (snapshotAt == null || (usedAt != null && !usedAt.isBefore(snapshotAt))) {
+                promotionName = redemption.getPromotionName();
+                promotionType = redemption.getPromotionType();
+                snapshotAt = usedAt;
+            }
             redemptions++;
             discountGiven = discountGiven.add(redemption.getDiscountAmount() != null
                     ? redemption.getDiscountAmount()
@@ -762,8 +779,8 @@ public class PromotionAnalyticsService {
             return TopPromotion.builder()
                     .rank(rank)
                     .promotionId(promotion.getPromotionId())
-                    .promotionName(promotion.getName())
-                    .type(promotion.getType())
+                    .promotionName(promotionName != null ? promotionName : promotion.getName())
+                    .type(promotionType != null ? promotionType : promotion.getType())
                     .redemptions(redemptions)
                     .discountGiven(discountGiven)
                     .revenueGenerated(revenueGenerated)

@@ -27,6 +27,10 @@ public class OrderProductResponse {
     private BigDecimal quantity;
     private BigDecimal unitPrice;
     private BigDecimal discount;
+    private Long promotionId;
+    private String promotionName;
+    private String promotionType;
+    private BigDecimal promotionValue;
     private BigDecimal lineTotal;
     private LocalDateTime createdAt;
 }

@@ -58,6 +58,7 @@ class SalesServiceImplReturnTest {
     @Mock private PromotionItemRepository promotionItemRepository;
     @Mock private PromotionBatchRepository promotionBatchRepository;
     @Mock private CustomerService customerService;
+    @Mock private SalePromotionService salePromotionService;
 
     private SalesServiceImpl salesService;
 
@@ -84,7 +85,8 @@ class SalesServiceImplReturnTest {
                 promotionRepository,
                 promotionItemRepository,
                 promotionBatchRepository,
-                customerService
+                customerService,
+                salePromotionService
         );
     }
 
@@ -96,6 +98,23 @@ class SalesServiceImplReturnTest {
         order.setCashSessionId(10L);
         order.setStatus("COMPLETED");
         return order;
+    }
+
+    @Test
+    void processSaleForwardsSelectedBillPromotionsToOrderCreation() {
+        SalesServiceImpl spyService = spy(salesService);
+        com.pos.system.dto.sale.ProcessSaleRequest request = new com.pos.system.dto.sale.ProcessSaleRequest();
+        request.setBranchId(2L);
+        request.setBillPromotionIds(List.of(7L, 8L));
+        request.setDiscount(new BigDecimal("190"));
+        com.pos.system.dto.sale.OrderResponse response = new com.pos.system.dto.sale.OrderResponse();
+        doReturn(response).when(spyService).createOrder(any());
+        assertThat(spyService.processSale(request)).isSameAs(response);
+        ArgumentCaptor<com.pos.system.dto.sale.CreateOrderRequest> captor =
+                ArgumentCaptor.forClass(com.pos.system.dto.sale.CreateOrderRequest.class);
+        verify(spyService).createOrder(captor.capture());
+        assertThat(captor.getValue().getBillPromotionIds()).containsExactly(7L, 8L);
+        assertThat(captor.getValue().getDiscount()).isEqualByComparingTo("190");
     }
 
     private SalesReturnRequest.ReturnItemDto returnItem(long itemId, String qty, String price, String condition) {

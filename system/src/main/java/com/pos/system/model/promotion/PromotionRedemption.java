@@ -31,5 +31,8 @@ public class PromotionRedemption {
 
     private Long customerId;
     private BigDecimal discountAmount;
+    private String promotionName;
+    private String promoCode;
+    private String promotionType;
     private LocalDateTime usedAt;
 }
