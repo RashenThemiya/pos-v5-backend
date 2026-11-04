@@ -56,7 +56,7 @@ public class PromotionController {
         return ResponseEntity.ok(promotionService.getPromotionsByItem(branchId, itemId));
     }
 
-    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW')")
+    @PreAuthorize("hasAuthority('ALL_PRIVILEGES') or hasAuthority('PROMOTION_VIEW') or hasAuthority('SALE_CREATE')")
     @GetMapping("/branch/{branchId}/active")
     public ResponseEntity<List<PromotionResponse>> getActivePromotionsByBranch(@PathVariable Long branchId) {
         return ResponseEntity.ok(promotionService.getActivePromotionsByBranch(branchId));
