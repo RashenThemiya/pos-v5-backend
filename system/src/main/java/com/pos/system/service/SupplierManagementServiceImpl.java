@@ -189,7 +189,7 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
 
         validateItemUnitAndVariant(dto.getBranchId(), dto.getItemId(), dto.getUnitId(), dto.getVariantId());
 
-        supplierItemRepository
+        SupplierItem supplierItem = supplierItemRepository
                 .findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(
                         dto.getBranchId(),
                         dto.getSupplierId(),
@@ -197,11 +197,12 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
                         dto.getVariantId(),
                         dto.getUnitId()
                 )
-                .ifPresent(x -> {
-                    throw new RuntimeException("Supplier already supplies this item/variant with this unit");
-                });
+                .orElseGet(SupplierItem::new);
 
-        SupplierItem supplierItem = new SupplierItem();
+        if (supplierItem.getSupplierItemId() != null && !Boolean.FALSE.equals(supplierItem.getIsActive())) {
+            throw new RuntimeException("Supplier already supplies this item/variant with this unit");
+        }
+
         supplierItem.setBranchId(dto.getBranchId());
         supplierItem.setSupplierId(dto.getSupplierId());
         supplierItem.setItemId(dto.getItemId());
@@ -211,7 +212,9 @@ public class SupplierManagementServiceImpl implements SupplierManagementService 
         supplierItem.setDefaultCostPrice(nvlMoney(dto.getDefaultCostPrice()));
         supplierItem.setIsPreferred(dto.getIsPreferred() != null ? dto.getIsPreferred() : false);
         supplierItem.setIsActive(dto.getIsActive() != null ? dto.getIsActive() : true);
-        supplierItem.setCreatedAt(LocalDateTime.now());
+        if (supplierItem.getSupplierItemId() == null) {
+            supplierItem.setCreatedAt(LocalDateTime.now());
+        }
         supplierItem.setUpdatedAt(LocalDateTime.now());
 
         return mapSupplierItem(supplierItemRepository.save(supplierItem));

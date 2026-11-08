@@ -20,6 +20,9 @@ public class SalesReturnItem {
     @Column(nullable = false)
     private Long returnId;
 
+    /** Original order line this return item draws against; null on rows created before line linking. */
+    private Long orderProductId;
+
     @Column(nullable = false)
     private Long itemId;
 

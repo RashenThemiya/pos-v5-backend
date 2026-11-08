@@ -19,6 +19,11 @@ public interface CustomerOrderRepository extends JpaRepository<CustomerOrder, Lo
 
     Optional<CustomerOrder> findByInvoiceNo(String invoiceNo);
 
+    /** Row-locks the order so concurrent returns against it are serialised. */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("select o from CustomerOrder o where o.orderId = :orderId")
+    Optional<CustomerOrder> findByIdForUpdate(@Param("orderId") Long orderId);
+
     boolean existsByInvoiceNo(String invoiceNo);
 
     boolean existsByOrderNo(String orderNo);

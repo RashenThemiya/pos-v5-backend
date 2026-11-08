@@ -32,5 +32,12 @@ public class OrderProductResponse {
     private String promotionType;
     private BigDecimal promotionValue;
     private BigDecimal lineTotal;
+    /** Line value actually paid: lineTotal less its share of bill discount and rounding. */
+    private BigDecimal netLineTotal;
+    private BigDecimal netUnitPrice;
+    private BigDecimal returnedQuantity;
+    private BigDecimal returnableQuantity;
+    private BigDecimal refundedAmount;
+    private BigDecimal refundableAmount;
     private LocalDateTime createdAt;
 }

@@ -27,6 +27,18 @@ public class OrderResponse {
     private BigDecimal rounding;
     private BigDecimal total;
     private String paymentStatus;
+    /** Sum of payments applied to the order. */
+    private BigDecimal amountPaid;
+    /** Order value written off by returns made while the order was not fully paid. */
+    private BigDecimal returnBalanceAdjustment;
+    /** Amount given back through returns: paid out plus credited to the customer account. */
+    private BigDecimal refundedAmount;
+    /** Part of amountPaid that was charged to the customer's credit account. */
+    private BigDecimal creditPaidAmount;
+    /** Credit-account payments already reversed by returns. */
+    private BigDecimal creditReversedAmount;
+    /** What the customer still owes: total - returnBalanceAdjustment - amountPaid. */
+    private BigDecimal balanceDue;
     private String status;
     private LocalDateTime orderDate;
     private String notes;

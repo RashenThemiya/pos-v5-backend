@@ -126,6 +126,51 @@ class SupplierManagementServiceImplProcurementFlowTest {
     private long poSequence;
     private long supplySequence;
 
+    @Test
+    void bulkAssignmentReactivatesRemovedItemWithSameIdentity() {
+        for (Long variantId : java.util.Arrays.asList(null, VARIANT_A_ID)) {
+            SupplierItem removed = activeSupplierItem(BRANCH_ID, SUPPLIER_ID, ITEM_A_ID, variantId, UNIT_A_ID);
+            removed.setSupplierItemId(99L);
+            removed.setIsActive(false);
+            removed.setCreatedAt(java.time.LocalDateTime.of(2025, 1, 1, 0, 0));
+            when(supplierItemRepository.findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(
+                    BRANCH_ID, SUPPLIER_ID, ITEM_A_ID, variantId, UNIT_A_ID)).thenReturn(Optional.of(removed));
+
+            var entry = new com.pos.system.dto.supplier.SupplierItemBulkEntryRequestDto();
+            entry.setItemId(ITEM_A_ID);
+            entry.setVariantId(variantId);
+            entry.setUnitId(UNIT_A_ID);
+            entry.setDefaultCostPrice(new BigDecimal("125.00"));
+            var request = new com.pos.system.dto.supplier.BulkSupplierItemRequestDto();
+            request.setBranchId(BRANCH_ID);
+            request.setSupplierId(SUPPLIER_ID);
+            request.setItems(List.of(entry));
+
+            var result = service.addSupplierItemsBulk(request).get(0);
+            assertThat(result.getSupplierItemId()).isEqualTo(99L);
+            assertThat(result.getIsActive()).isTrue();
+            assertThat(result.getCreatedAt()).isEqualTo(java.time.LocalDateTime.of(2025, 1, 1, 0, 0));
+            assertThat(result.getDefaultCostPrice()).isEqualByComparingTo("125.00");
+            assertThatThrownBy(() -> service.addSupplierItemsBulk(request))
+                    .hasMessage("Supplier already supplies this item/variant with this unit");
+        }
+    }
+
+    @Test
+    void assignmentCreatesNewRowWhenCombinationDoesNotExist() {
+        when(supplierItemRepository.findByBranchIdAndSupplierIdAndItemIdAndVariantIdAndUnitId(
+                BRANCH_ID, SUPPLIER_ID, ITEM_A_ID, null, UNIT_A_ID)).thenReturn(Optional.empty());
+        var request = new com.pos.system.dto.supplier.SupplierItemRequestDto();
+        request.setBranchId(BRANCH_ID);
+        request.setSupplierId(SUPPLIER_ID);
+        request.setItemId(ITEM_A_ID);
+        request.setUnitId(UNIT_A_ID);
+
+        var result = service.addSupplierItem(request);
+        assertThat(result.getIsActive()).isTrue();
+        assertThat(result.getCreatedAt()).isNotNull();
+    }
+
     @BeforeEach
     void setUp() {
         service = new SupplierManagementServiceImpl(

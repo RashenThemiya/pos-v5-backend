@@ -22,6 +22,9 @@ public class SalesReturnResponse {
     private LocalDateTime returnDate;
     private String refundMethod;
     private BigDecimal refundAmount;
+    private BigDecimal returnValue;
+    private BigDecimal balanceAdjustment;
+    private BigDecimal accountCredit;
     private ReturnVoucherResponse voucher;
     private String voucherNo;
     private BigDecimal voucherRemainingAmount;
@@ -36,6 +39,7 @@ public class SalesReturnResponse {
     @AllArgsConstructor
     public static class ReturnItemResponse {
         private Long returnItemId;
+        private Long orderProductId;
         private Long itemId;
         private Long variantId;
         private String variantSku;

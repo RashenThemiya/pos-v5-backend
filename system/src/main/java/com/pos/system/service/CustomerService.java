@@ -188,6 +188,21 @@ public class CustomerService {
         );
     }
 
+    /** Credits a sales return back to the customer's account: clears their debt first, then becomes store credit. */
+    @Transactional
+    public void recordReturnCredit(Long customerId, BigDecimal amount, Long returnId, String invoiceNo, Long createdBy) {
+        applyBalanceChange(
+                customerId,
+                amount,
+                "Sales return credit for invoice: " + invoiceNo,
+                "SALES_RETURN_CREDIT",
+                "sales_returns",
+                returnId,
+                createdBy,
+                true
+        );
+    }
+
     @Transactional
     public CustomerPaymentResponse createCustomerPayment(Long customerId, CustomerPaymentRequest request) {
         if (request == null) {

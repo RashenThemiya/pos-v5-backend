@@ -40,6 +40,7 @@ import java.util.UUID;
 public class SalesServiceImpl implements SalesService {
 
     private static final String RETURN_VOUCHER_PAYMENT_METHOD = "RETURN_VOUCHER";
+    private static final String BALANCE_ADJUSTMENT_REFUND_METHOD = "BALANCE_ADJUSTMENT";
 
     private final CustomerOrderRepository orderRepository;
     private final OrderProductRepository orderProductRepository;
@@ -339,7 +340,8 @@ public class SalesServiceImpl implements SalesService {
         }
         validatePaymentRequestReturnVoucherPayments(request.getPayments());
 
-        BigDecimal orderTotal = nvl(order.getTotal());
+        // Goods returned while unpaid are no longer owed.
+        BigDecimal orderTotal = nvl(order.getTotal()).subtract(returnBalanceAdjustment(orderId)).max(BigDecimal.ZERO);
         BigDecimal runningPaid = paymentRepository.findByOrderId(orderId).stream()
                 .map(payment -> nvl(payment.getAmount()))
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -422,10 +424,38 @@ public class SalesServiceImpl implements SalesService {
 
     @Override
     public SalesReturnResponse createReturn(SalesReturnRequest request) {
-        CustomerOrder order = findOrderById(request.getOrderId());
+        if (request.getOrderId() == null) {
+            throw new RuntimeException("A return must reference the original order");
+        }
+        // Lock the order row so concurrent returns against it are serialised. The ledger below
+        // then sees every committed prior return.
+        CustomerOrder order = orderRepository.findByIdForUpdate(request.getOrderId())
+                .orElseThrow(() -> new RuntimeException("Order not found: " + request.getOrderId()));
 
         if ("CANCELLED".equals(order.getStatus())) {
             throw new RuntimeException("Cannot return items from a cancelled order");
+        }
+        if (request.getItems() == null || request.getItems().isEmpty()) {
+            throw new RuntimeException("Return must have at least one item");
+        }
+
+        // Validate and price the whole request before writing returns, stock or cash.
+        SalesReturnLedger ledger = buildReturnLedger(order);
+        List<PlannedReturnLine> plan = new ArrayList<>();
+        for (SalesReturnRequest.ReturnItemDto item : request.getItems()) {
+            if (item.getItemId() == null) {
+                throw new RuntimeException("Return line is missing itemId");
+            }
+            item.setVariantId(resolveReturnLineVariantId(request.getBranchId(), item));
+            for (SalesReturnLedger.Allocation allocation : ledger.reserve(item.getOrderProductId(), item.getItemId(),
+                    item.getVariantId(), item.getInternalBatchBarcode(), item.getQuantity())) {
+                plan.add(new PlannedReturnLine(item, allocation));
+            }
+        }
+        ReturnSettlement settlement = settleReturn(order, plan, request.getRefundMethod());
+        Long accountCustomerId = request.getCustomerId() != null ? request.getCustomerId() : order.getCustomerId();
+        if (settlement.accountCredit().signum() > 0 && accountCustomerId == null) {
+            throw new RuntimeException("A customer is required to credit this return to an account");
         }
 
         BigDecimal totalRefund = BigDecimal.ZERO;
@@ -442,33 +472,61 @@ public class SalesServiceImpl implements SalesService {
 
         SalesReturn savedReturn = returnRepository.save(salesReturn);
 
-        for (SalesReturnRequest.ReturnItemDto item : request.getItems()) {
-            BigDecimal lineRefund = item.getUnitPrice()
-                    .multiply(item.getQuantity())
-                    .setScale(2, RoundingMode.HALF_UP);
+        for (PlannedReturnLine planned : plan) {
+            OrderProduct soldLine = planned.allocation().product();
+            BigDecimal lineRefund = planned.allocation().refund();
             totalRefund = totalRefund.add(lineRefund);
+
+            // Server-side view of the line: quantity, batch and refund price come from the original sale.
+            SalesReturnRequest.ReturnItemDto line = new SalesReturnRequest.ReturnItemDto();
+            line.setOrderProductId(soldLine.getOrderProductId());
+            line.setItemId(soldLine.getItemId());
+            line.setVariantId(soldLine.getVariantId());
+            String requestedBatch = planned.request().getInternalBatchBarcode();
+            line.setInternalBatchBarcode(requestedBatch != null && !requestedBatch.isBlank()
+                    ? requestedBatch : soldLine.getBatchBarcode());
+            line.setQuantity(planned.allocation().quantity());
+            line.setUnitPrice(planned.allocation().unitRefund());
+            line.setCondition(planned.request().getCondition());
 
             SalesReturnItem returnItem = new SalesReturnItem();
             returnItem.setReturnId(savedReturn.getReturnId());
-            returnItem.setItemId(item.getItemId());
-            item.setVariantId(resolveReturnLineVariantId(request.getBranchId(), item));
-            returnItem.setVariantId(item.getVariantId());
-            returnItem.setInternalBatchBarcode(item.getInternalBatchBarcode());
-            returnItem.setQuantity(item.getQuantity());
-            returnItem.setUnitPrice(item.getUnitPrice());
+            returnItem.setOrderProductId(line.getOrderProductId());
+            returnItem.setItemId(line.getItemId());
+            returnItem.setVariantId(line.getVariantId());
+            returnItem.setInternalBatchBarcode(line.getInternalBatchBarcode());
+            returnItem.setQuantity(line.getQuantity());
+            returnItem.setUnitPrice(line.getUnitPrice());
             returnItem.setLineRefund(lineRefund);
-            returnItem.setCondition(item.getCondition());
+            returnItem.setCondition(line.getCondition());
             returnItemRepository.save(returnItem);
 
-            // add stock back
-            addReturnStock(request.getBranchId(), item, savedReturn.getReturnId(), request.getProcessedBy());
+            // add stock back, in base units: the line quantity is in the unit it was sold in
+            BigDecimal baseQty = line.getQuantity().multiply(baseUnitMultiplier(soldLine));
+            addReturnStock(request.getBranchId(), line, baseQty, soldLine.getUnitId(),
+                    savedReturn.getReturnId(), request.getProcessedBy());
+        }
+        // Line refunds are the goods' value; the settlement decides how much is paid back vs. written off.
+        savedReturn.setReturnValue(totalRefund.setScale(2, RoundingMode.HALF_UP));
+        savedReturn.setBalanceAdjustment(settlement.balanceAdjustment());
+        savedReturn.setRefundAmount(settlement.refund());
+        savedReturn.setAccountCredit(settlement.accountCredit());
+        savedReturn.setCreditReversal(settlement.creditReversal());
+        returnRepository.save(savedReturn);
+        totalRefund = settlement.refund();
+
+        if (settlement.accountCredit().signum() > 0) {
+            customerService.recordReturnCredit(accountCustomerId, settlement.accountCredit(),
+                    savedReturn.getReturnId(), order.getInvoiceNo(), request.getProcessedBy());
         }
 
-        savedReturn.setRefundAmount(totalRefund);
-        returnRepository.save(savedReturn);
+        if (settlement.balanceAdjustment().signum() > 0) {
+            refreshPaymentStatus(order, settlement);
+        }
 
         // write cash session transaction for cash refund
-        if ("CASH".equals(request.getRefundMethod()) && order.getCashSessionId() != null) {
+        if ("CASH".equals(request.getRefundMethod()) && order.getCashSessionId() != null
+                && totalRefund.signum() > 0) {
             CashSessionTransaction txn = new CashSessionTransaction();
             txn.setSessionId(order.getCashSessionId());
             txn.setType("REFUND");
@@ -646,7 +704,9 @@ public class SalesServiceImpl implements SalesService {
         stockMovementRepository.save(movement);
     }
 
-    private void addReturnStock(Long branchId, SalesReturnRequest.ReturnItemDto item, Long returnId, Long userId) {
+    /** {@code baseQty} is the returned quantity in base units; {@code soldUnitId} is the unit the line was sold in. */
+    private void addReturnStock(Long branchId, SalesReturnRequest.ReturnItemDto item, BigDecimal baseQty,
+                                Long soldUnitId, Long returnId, Long userId) {
         // only add back to stock if condition is GOOD
         if (!"GOOD".equalsIgnoreCase(item.getCondition())) {
             // damaged/expired — move to damaged stock
@@ -658,9 +718,9 @@ public class SalesServiceImpl implements SalesService {
                 stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
                         .ifPresent(batch -> {
                             if ("EXPIRED".equalsIgnoreCase(item.getCondition())) {
-                                batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(item.getQuantity()));
+                                batch.setExpiredQty(nvlQty(batch.getExpiredQty()).add(baseQty));
                             } else {
-                                batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(item.getQuantity()));
+                                batch.setDamagedQty(nvlQty(batch.getDamagedQty()).add(baseQty));
                             }
                             stockBatchRepository.save(batch);
                         });
@@ -673,8 +733,8 @@ public class SalesServiceImpl implements SalesService {
                 if (item.getInternalBatchBarcode() != null) {
                     stockBatchRepository.findByBranchIdAndInternalBatchBarcode(branchId, item.getInternalBatchBarcode())
                             .ifPresent(batch -> {
-                                batch.setQtyRemaining(batch.getQtyRemaining().add(item.getQuantity()));
-                                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(item.getQuantity()));
+                                batch.setQtyRemaining(nvlQty(batch.getQtyRemaining()).add(baseQty));
+                                batch.setAvailableQty(nvlQty(batch.getAvailableQty()).add(baseQty));
                                 stockBatchRepository.save(batch);
                             });
                 }
@@ -686,9 +746,10 @@ public class SalesServiceImpl implements SalesService {
         movement.setMovementType("SALE_RETURN");
         movement.setItemId(item.getItemId());
         movement.setVariantId(item.getVariantId());
-        movement.setUnitId(1L); // base unit for returns
+        // Same convention as the SALE movement: sold unit id, quantity in base units.
+        movement.setUnitId(soldUnitId != null ? soldUnitId : 1L);
         movement.setInternalBatchBarcode(item.getInternalBatchBarcode());
-        movement.setQuantity(item.getQuantity());
+        movement.setQuantity(baseQty);
         movement.setUnitPrice(item.getUnitPrice());
         movement.setRefTable("sales_returns");
         movement.setRefId(returnId);
@@ -1102,6 +1163,110 @@ public class SalesServiceImpl implements SalesService {
                 .orElseThrow(() -> new RuntimeException("Order not found: " + orderId));
     }
 
+    private SalesReturnLedger buildReturnLedger(CustomerOrder order) {
+        return buildReturnLedger(order, orderProductRepository.findByOrderId(order.getOrderId()));
+    }
+
+    private SalesReturnLedger buildReturnLedger(CustomerOrder order, List<OrderProduct> products) {
+        List<Long> priorReturnIds = returnRepository.findByOrderId(order.getOrderId()).stream()
+                .filter(r -> !"CANCELLED".equalsIgnoreCase(r.getStatus()))
+                .map(SalesReturn::getReturnId)
+                .toList();
+        List<SalesReturnItem> priorItems = priorReturnIds.isEmpty()
+                ? List.of()
+                : returnItemRepository.findByReturnIdIn(priorReturnIds);
+        return SalesReturnLedger.build(order, products, priorItems);
+    }
+
+    /**
+     * Multiplier from the line's sale unit to base units. Falls back to the unit row even if it was deactivated
+     * after the sale, so a return converts at the same rate the sale was deducted at.
+     */
+    private BigDecimal baseUnitMultiplier(OrderProduct soldLine) {
+        if (soldLine.getUnitId() == null) {
+            return BigDecimal.ONE;
+        }
+        return itemUnitRepository.findByItemIdAndUnitIdAndIsActiveTrue(soldLine.getItemId(), soldLine.getUnitId())
+                .or(() -> itemUnitRepository.findById(soldLine.getUnitId()))
+                .map(ItemUnit::getMultiplierToBase)
+                .filter(multiplier -> multiplier != null && multiplier.signum() > 0)
+                .orElse(BigDecimal.ONE);
+    }
+
+    private record ReturnSettlement(BigDecimal balanceAdjustment, BigDecimal refund, BigDecimal accountCredit,
+                                    BigDecimal creditReversal, BigDecimal paid, BigDecimal adjustedAfter) {
+    }
+
+    /**
+     * Splits a return's value between what the customer still owes and money paid back.
+     * The value first clears any balance still due on the order (so unpaid goods are not refunded).
+     * Anything left is given back, never more than what was actually paid less earlier refunds.
+     * The share paid on the customer's credit account always goes back to that account, not out as cash.
+     * With BALANCE_ADJUSTMENT the whole amount given back is credited to the account.
+     */
+    private ReturnSettlement settleReturn(CustomerOrder order, List<PlannedReturnLine> plan, String refundMethod) {
+        BigDecimal value = plan.stream().map(p -> p.allocation().refund())
+                .reduce(BigDecimal.ZERO, BigDecimal::add).setScale(2, RoundingMode.HALF_UP);
+        List<Payment> payments = paymentRepository.findByOrderId(order.getOrderId());
+        BigDecimal paid = payments.stream()
+                .map(Payment::getAmount).map(this::nvl).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal creditPaid = creditPaid(payments);
+        List<SalesReturn> prior = activeReturns(order.getOrderId());
+        BigDecimal priorAdjusted = prior.stream().map(SalesReturn::getBalanceAdjustment).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal priorRefunded = prior.stream().map(this::givenBack).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal priorReversed = prior.stream().map(SalesReturn::getCreditReversal).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        BigDecimal balanceDue = nvl(order.getTotal()).subtract(priorAdjusted).subtract(paid).max(BigDecimal.ZERO);
+        BigDecimal adjustment = value.min(balanceDue).setScale(2, RoundingMode.HALF_UP);
+        BigDecimal refundable = paid.subtract(priorRefunded).max(BigDecimal.ZERO);
+        BigDecimal payout = value.subtract(adjustment).min(refundable).setScale(2, RoundingMode.HALF_UP);
+
+        BigDecimal creditReversal = payout.min(creditPaid.subtract(priorReversed).max(BigDecimal.ZERO));
+        BigDecimal rest = payout.subtract(creditReversal);
+        boolean toAccount = BALANCE_ADJUSTMENT_REFUND_METHOD.equalsIgnoreCase(refundMethod);
+        BigDecimal accountCredit = toAccount ? payout : creditReversal;
+        BigDecimal refund = toAccount ? BigDecimal.ZERO.setScale(2) : rest;
+        return new ReturnSettlement(adjustment, refund, accountCredit, creditReversal, paid,
+                priorAdjusted.add(adjustment));
+    }
+
+    /** Everything a return gave back: paid out plus credited to the customer's account. */
+    private BigDecimal givenBack(SalesReturn r) {
+        return nvl(r.getRefundAmount()).add(nvl(r.getAccountCredit()));
+    }
+
+    private BigDecimal creditPaid(List<Payment> payments) {
+        return payments.stream()
+                .filter(p -> "CREDIT".equalsIgnoreCase(p.getPaymentMethod()))
+                .map(Payment::getAmount).map(this::nvl).reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    private List<SalesReturn> activeReturns(Long orderId) {
+        return returnRepository.findByOrderId(orderId).stream()
+                .filter(r -> !"CANCELLED".equalsIgnoreCase(r.getStatus()))
+                .toList();
+    }
+
+    private BigDecimal returnBalanceAdjustment(Long orderId) {
+        return activeReturns(orderId).stream().map(SalesReturn::getBalanceAdjustment).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
+    /** After a return writes off part of the balance, the order may now be settled. */
+    private void refreshPaymentStatus(CustomerOrder order, ReturnSettlement settlement) {
+        BigDecimal due = nvl(order.getTotal()).subtract(settlement.adjustedAfter());
+        if (settlement.paid().compareTo(due) >= 0) {
+            order.setPaymentStatus("PAID");
+            order.setUpdatedAt(LocalDateTime.now());
+            orderRepository.save(order);
+        }
+    }
+
+    private record PlannedReturnLine(SalesReturnRequest.ReturnItemDto request, SalesReturnLedger.Allocation allocation) {
+    }
+
     private SalesReturn findReturnById(Long returnId) {
         return returnRepository.findById(returnId)
                 .orElseThrow(() -> new RuntimeException("Return not found: " + returnId));
@@ -1115,11 +1280,22 @@ public class SalesServiceImpl implements SalesService {
 
     private OrderResponse buildOrderResponse(CustomerOrder order) {
         List<AppliedPromotionResponse> appliedPromotions = salePromotionService.getAppliedPromotions(order.getOrderId());
-        List<OrderProductResponse> items = orderProductRepository.findByOrderId(order.getOrderId())
-                .stream().map(this::mapOrderProduct).toList();
+        List<OrderProduct> products = orderProductRepository.findByOrderId(order.getOrderId());
+        SalesReturnLedger ledger = buildReturnLedger(order, products);
+        List<OrderProductResponse> items = products.stream()
+                .map(op -> withReturnPosition(mapOrderProduct(op), ledger.line(op.getOrderProductId())))
+                .toList();
 
-        List<PaymentResponse> payments = paymentRepository.findByOrderId(order.getOrderId())
-                .stream().map(this::mapPayment).toList();
+        List<Payment> paymentRows = paymentRepository.findByOrderId(order.getOrderId());
+        List<PaymentResponse> payments = paymentRows.stream().map(this::mapPayment).toList();
+        BigDecimal amountPaid = paymentRows.stream().map(Payment::getAmount).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        List<SalesReturn> activeReturns = activeReturns(order.getOrderId());
+        BigDecimal adjusted = activeReturns.stream().map(SalesReturn::getBalanceAdjustment).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal refunded = activeReturns.stream().map(this::givenBack).reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal creditReversed = activeReturns.stream().map(SalesReturn::getCreditReversal).map(this::nvl)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         return OrderResponse.builder()
                 .orderId(order.getOrderId())
@@ -1135,6 +1311,12 @@ public class SalesServiceImpl implements SalesService {
                 .rounding(order.getRounding())
                 .total(order.getTotal())
                 .paymentStatus(order.getPaymentStatus())
+                .amountPaid(amountPaid)
+                .returnBalanceAdjustment(adjusted)
+                .refundedAmount(refunded)
+                .creditPaidAmount(creditPaid(paymentRows))
+                .creditReversedAmount(creditReversed)
+                .balanceDue(nvl(order.getTotal()).subtract(adjusted).subtract(amountPaid).max(BigDecimal.ZERO))
                 .status(order.getStatus())
                 .orderDate(order.getOrderDate())
                 .notes(order.getNotes())
@@ -1238,6 +1420,19 @@ public class SalesServiceImpl implements SalesService {
                 .lineTotal(op.getLineTotal())
                 .createdAt(op.getCreatedAt())
                 .build();
+    }
+
+    private OrderProductResponse withReturnPosition(OrderProductResponse response, SalesReturnLedger.Line line) {
+        if (line == null) {
+            return response;
+        }
+        response.setNetLineTotal(line.netTotal());
+        response.setNetUnitPrice(line.netUnitPrice());
+        response.setReturnedQuantity(line.returnedQuantity());
+        response.setReturnableQuantity(line.remainingQuantity());
+        response.setRefundedAmount(line.refundedAmount());
+        response.setRefundableAmount(line.refundableAmount());
+        return response;
     }
 
     private String resolveUnitName(ItemUnit unit) {
@@ -1344,6 +1539,7 @@ public class SalesServiceImpl implements SalesService {
                             .map(i -> i.getName()).orElse(null);
                     return SalesReturnResponse.ReturnItemResponse.builder()
                             .returnItemId(ri.getReturnItemId())
+                            .orderProductId(ri.getOrderProductId())
                             .itemId(ri.getItemId())
                             .variantId(ri.getVariantId())
                             .variantSku(resolveVariantSku(ri.getVariantId()))
@@ -1366,6 +1562,9 @@ public class SalesServiceImpl implements SalesService {
                 .returnDate(r.getReturnDate())
                 .refundMethod(r.getRefundMethod())
                 .refundAmount(r.getRefundAmount())
+                .returnValue(r.getReturnValue() != null ? r.getReturnValue() : r.getRefundAmount())
+                .balanceAdjustment(nvl(r.getBalanceAdjustment()))
+                .accountCredit(nvl(r.getAccountCredit()))
                 .voucher(voucher)
                 .voucherNo(voucher != null ? voucher.getVoucherNo() : null)
                 .voucherRemainingAmount(voucher != null ? voucher.getRemainingAmount() : null)
