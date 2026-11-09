@@ -10,6 +10,8 @@ public interface ItemVariantRepository extends JpaRepository<ItemVariant, Long> 
     List<ItemVariant> findByItemIdOrderByVariantIdAsc(Long itemId);
     Optional<ItemVariant> findByVariantIdAndItemId(Long variantId, Long itemId);
     Optional<ItemVariant> findByBranchIdAndSku(Long branchId, String sku);
+    Optional<ItemVariant> findByBranchIdAndSkuIgnoreCase(Long branchId, String sku);
+    Optional<ItemVariant> findByBranchIdAndVariantSkuIgnoreCase(Long branchId, String variantSku);
     boolean existsByBranchIdAndSku(Long branchId, String sku);
     boolean existsByBranchIdAndSkuAndVariantIdNot(Long branchId, String sku, Long variantId);
     boolean existsByBranchIdAndVariantSku(Long branchId, String variantSku);

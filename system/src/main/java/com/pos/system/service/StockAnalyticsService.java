@@ -583,7 +583,7 @@ public class StockAnalyticsService {
                 "DAMAGED_TO_AVAILABLE",
                 "EXPIRED_TO_AVAILABLE",
                 "AVAILABLE_OUT",
-                "AVAILABLE_IN").contains(type)) {
+                "AVAILABLE_IN", "COUNT_AVAILABLE").contains(type)) {
             return MovementCategory.ADJUSTMENT;
         }
         return MovementCategory.OTHER;
@@ -591,6 +591,7 @@ public class StockAnalyticsService {
 
     private BigDecimal signedAdjustmentQty(StockMovement movement) {
         String type = normalize(movement.getMovementType());
+        if ("COUNT_AVAILABLE".equals(type)) return nvl(movement.getQuantity());
         BigDecimal qty = movementQtyAbs(movement);
         if (Set.of("AVAILABLE_OUT", "AVAILABLE_TO_DAMAGED", "AVAILABLE_TO_EXPIRED").contains(type)) {
             return qty.negate();

@@ -9,6 +9,7 @@ import java.util.List;
 
 public interface StockMovementRepository extends JpaRepository<StockMovement, Long> {
     List<StockMovement> findByBranchIdOrderByCreatedAtDesc(Long branchId);
+    List<StockMovement> findByBranchIdAndNoteStartingWith(Long branchId, String prefix);
     Page<StockMovement> findByBranchId(Long branchId, Pageable pageable);
     List<StockMovement> findByBranchIdAndItemIdOrderByCreatedAtDesc(Long branchId, Long itemId);
     List<StockMovement> findByBranchIdAndMovementTypeOrderByCreatedAtDesc(Long branchId, String movementType);

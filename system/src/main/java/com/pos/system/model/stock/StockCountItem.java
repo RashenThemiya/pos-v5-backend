@@ -25,8 +25,11 @@ public class StockCountItem {
 
     private Long variantId;
 
+    @Column(precision = 14, scale = 4)
     private BigDecimal systemQty;
+    @Column(precision = 14, scale = 4)
     private BigDecimal countedQty;
+    @Column(precision = 14, scale = 4)
     private BigDecimal differenceQty;
     private String note;
 }

@@ -22,6 +22,10 @@ public class StockBatch {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long stockBatchId;
 
+    @Version
+    @Column(nullable = false, columnDefinition = "BIGINT DEFAULT 0")
+    private Long version = 0L;
+
     @Column(nullable = false)
     private Long branchId;
 
