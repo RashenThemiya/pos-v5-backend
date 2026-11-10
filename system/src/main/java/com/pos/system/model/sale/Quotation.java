@@ -33,17 +33,17 @@ public class Quotation {
     private String status;
     private LocalDate validUntil;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal subtotal;
+    private BigDecimal subtotal = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal itemDiscount;
+    private BigDecimal itemDiscount = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal discount;
+    private BigDecimal discount = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal taxAmount;
+    private BigDecimal taxAmount = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal rounding;
+    private BigDecimal rounding = BigDecimal.ZERO;
     @Column(nullable = false, precision = 19, scale = 2)
-    private BigDecimal total;
+    private BigDecimal total = BigDecimal.ZERO;
     @Column(length = 2000)
     private String notes;
     @Column(length = 2000)
